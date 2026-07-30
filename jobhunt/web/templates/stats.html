@@ -1,43 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Stats — jobhunt{% endblock %}
 
-{% macro conversion(rows, header) %}
-  {% if rows %}
-  <table>
-    <thead>
-      <tr>
-        <th>{{ header }}</th>
-        <th class="num">Tracked</th>
-        <th class="num">Applied</th>
-        <th class="num">Responses</th>
-        <th class="num">Interviews</th>
-        <th class="num">Offers</th>
-        <th class="num">Ghosted</th>
-        <th class="num">Response rate</th>
-        <th class="num">Interview rate</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.label }}</td>
-        <td class="num dim">{{ r.tracked }}</td>
-        <td class="num">{{ r.applied }}</td>
-        <td class="num">{{ r.responses }}</td>
-        <td class="num">{{ r.interviews }}</td>
-        <td class="num">{{ r.offers }}</td>
-        <td class="num dim">{{ r.ghosted }}</td>
-        <td class="num">{{ r.response_rate|pct }}</td>
-        <td class="num">{{ r.interview_rate|pct }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-    <p class="empty">No applications logged yet.</p>
-  {% endif %}
-{% endmacro %}
-
 {% block main %}
 <h1>Stats</h1>
 <p class="sub">
@@ -71,27 +34,18 @@
 </div>
 
 <h2>Conversion by ATS</h2>
-{{ conversion(by_ats, 'ATS') }}
-<p class="hint">Derived by regex on the apply URL at read time, never stored.</p>
+{% with table = tables.ats %}{% include "_stats_conversion.html" %}{% endwith %}
+<p class="hint">
+  Derived by regex on the apply URL at read time, never stored. Rates are blank
+  where nothing was submitted, and those rows sort to the bottom either way.
+</p>
 
 <h2>Conversion by source</h2>
-{{ conversion(by_source, 'Source') }}
+{% with table = tables.source %}{% include "_stats_conversion.html" %}{% endwith %}
 
 <h2>Conversion by referral status</h2>
-{{ conversion(by_referral, 'Referral') }}
+{% with table = tables.referral %}{% include "_stats_conversion.html" %}{% endwith %}
 
 <h2>Current state</h2>
-<table>
-  <thead><tr><th>State</th><th class="num">Applications</th></tr></thead>
-  <tbody>
-    {% for s in PIPELINE_ORDER %}
-      <tr><td><span class="pill {{ s }}">{{ s.replace('_', ' ') }}</span></td>
-          <td class="num">{{ counts.get(s, 0) }}</td></tr>
-    {% endfor %}
-    {% for s in DEAD_ENDS %}
-      <tr><td><span class="pill {{ s }}">{{ s }}</span></td>
-          <td class="num">{{ counts.get(s, 0) }}</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+{% with table = tables.states %}{% include "_stats_states.html" %}{% endwith %}
 {% endblock %}

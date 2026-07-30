@@ -11,6 +11,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -66,22 +67,89 @@ templates.env.globals["DEAD_ENDS"] = sorted(
 # ================================== pipeline ==================================
 
 
+FILTER_FIELDS = ("q", "state", "ats", "source", "referral", "waa")
+DEFAULT_SORT = "applied"
+DEFAULT_DIRECTION = "desc"
+# Columns whose most useful first click is newest/highest first.
+DESCENDING_FIRST = frozenset({"applied", "waa", "state"})
+
+
+def _table_view(request: Request, conn: sqlite3.Connection) -> dict[str, Any]:
+    """Filter/sort state read from the query string, plus everything to render it."""
+    params = request.query_params
+    filters = {name: (params.get(name) or "").strip() for name in FILTER_FIELDS}
+
+    sort = params.get("sort") or DEFAULT_SORT
+    if sort not in queries.SORTABLE:
+        sort = DEFAULT_SORT
+    direction = params.get("dir") if params.get("dir") in ("asc", "desc") else DEFAULT_DIRECTION
+
+    active = {name: value for name, value in filters.items() if value}
+    headers = []
+    for column, label in queries.SORTABLE.items():
+        is_active = column == sort
+        if is_active:
+            next_direction = "asc" if direction == "desc" else "desc"
+        else:
+            next_direction = "desc" if column in DESCENDING_FIRST else "asc"
+        headers.append(
+            {
+                "column": column,
+                "label": label,
+                "active": is_active,
+                "direction": direction if is_active else None,
+                "query": urlencode({**active, "sort": column, "dir": next_direction}),
+            }
+        )
+
+    # Funnel steps are the state filter in disguise. They keep the other filters
+    # and the sort, and clicking the active step clears the state rather than
+    # re-applying it — the step doubles as the way back out.
+    others = {name: value for name, value in active.items() if name != "state"}
+    ordering = {"sort": sort, "dir": direction}
+    funnel = {
+        step: urlencode(
+            {**others, **ordering}
+            if step == filters["state"]
+            else {**others, "state": step, **ordering}
+        )
+        for step in list(states.PIPELINE_ORDER)
+        + sorted(states.TERMINAL.difference(states.PIPELINE_ORDER))
+    }
+
+    return {
+        "applications": queries.filter_applications(
+            conn, sort=sort, direction=direction, **filters
+        ),
+        "headers": headers,
+        "filters": filters,
+        "sort": sort,
+        "direction": direction,
+        "active_filters": len(active),
+        "facets": queries.facets(conn),
+        "funnel": funnel,
+        "clear_query": urlencode(ordering),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
-def index(
-    request: Request,
-    conn: Conn,
-    state: Annotated[str | None, Query()] = None,
-) -> Response:
+def index(request: Request, conn: Conn) -> Response:
+    view = _table_view(request, conn)
+    # Filter and sort controls swap the table alone; a plain visit or a reload of
+    # the pushed URL renders the whole page from the same query string.
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request, "_application_table.html", {**view, "oob": True}
+        )
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "page": "pipeline",
             "counts": queries.state_counts(conn),
-            "applications": queries.list_applications(conn, state=state),
-            "filter_state": state,
             "health": queries.queue_health(conn),
             "honesty": queries.honesty(conn),
+            **view,
         },
     )
 
@@ -314,18 +382,133 @@ def _state_panel(request: Request, conn: sqlite3.Connection, application_id: int
 # =================================== stats ===================================
 
 
+# Conversion tables on the stats page: URL prefix -> the bucket column's header.
+STATS_TABLES = {"ats": "ATS", "source": "Source", "referral": "Referral"}
+# Each table sorts independently, so its parameters are namespaced by prefix.
+STATS_DEFAULTS = {"ats": ("applied", "desc"), "source": ("applied", "desc"),
+                  "referral": ("applied", "desc"), "states": ("state", "asc")}
+
+
+def _stats_headers(
+    prefix: str,
+    columns: dict[str, str],
+    sort: str,
+    direction: str,
+    every_param: dict[str, str],
+    numeric_from: int = 1,
+) -> list[dict[str, Any]]:
+    headers = []
+    for index, (column, label) in enumerate(columns.items()):
+        is_active = column == sort
+        if is_active:
+            next_direction = "asc" if direction == "desc" else "desc"
+        else:
+            # Counts and rates are most useful highest-first; names A–Z.
+            next_direction = "desc" if index >= numeric_from else "asc"
+        query = {**every_param, f"{prefix}_sort": column, f"{prefix}_dir": next_direction}
+        headers.append(
+            {
+                "column": column,
+                "label": label,
+                "active": is_active,
+                "direction": direction if is_active else None,
+                "numeric": index >= numeric_from,
+                "query": urlencode(query),
+            }
+        )
+    return headers
+
+
+def _stats_view(request: Request, conn: sqlite3.Connection) -> dict[str, Any]:
+    params = request.query_params
+    ordering: dict[str, tuple[str, str]] = {}
+    for prefix, (default_sort, default_direction) in STATS_DEFAULTS.items():
+        allowed = (
+            queries.STATE_TABLE_SORTABLE if prefix == "states" else queries.CONVERSION_SORTABLE
+        )
+        sort = params.get(f"{prefix}_sort") or default_sort
+        if sort not in allowed:
+            sort = default_sort
+        direction = params.get(f"{prefix}_dir")
+        if direction not in ("asc", "desc"):
+            direction = default_direction
+        ordering[prefix] = (sort, direction)
+
+    # Every header link carries all four tables' ordering, so a pushed URL
+    # reloads into exactly the view on screen.
+    every_param = {}
+    for prefix, (sort, direction) in ordering.items():
+        every_param[f"{prefix}_sort"] = sort
+        every_param[f"{prefix}_dir"] = direction
+
+    tables = {}
+    for prefix, bucket_label in STATS_TABLES.items():
+        sort, direction = ordering[prefix]
+        columns = {**queries.CONVERSION_SORTABLE, "label": bucket_label}
+        tables[prefix] = {
+            "prefix": prefix,
+            "rows": queries.sort_buckets(
+                queries.conversion_by(conn, prefix), sort, direction
+            ),
+            "sort": sort,
+            "direction": direction,
+            "headers": _stats_headers(prefix, columns, sort, direction, every_param),
+        }
+
+    sort, direction = ordering["states"]
+    tables["states"] = {
+        "prefix": "states",
+        "rows": queries.state_rows(conn, sort, direction),
+        "sort": sort,
+        "direction": direction,
+        "headers": _stats_headers(
+            "states", queries.STATE_TABLE_SORTABLE, sort, direction, every_param
+        ),
+    }
+    return {"tables": tables}
+
+
 @app.get("/stats", response_class=HTMLResponse)
 def stats(request: Request, conn: Conn) -> Response:
-    context: dict[str, Any] = {
-        "page": "stats",
-        "counts": queries.state_counts(conn),
-        "by_ats": queries.conversion_by(conn, "ats"),
-        "by_source": queries.conversion_by(conn, "source"),
-        "by_referral": queries.conversion_by(conn, "referral"),
-        "honesty": queries.honesty(conn),
-        "health": queries.queue_health(conn),
-    }
-    return templates.TemplateResponse(request, "stats.html", context)
+    view = _stats_view(request, conn)
+    requested = request.query_params.get("table")
+    # A sort click swaps its own table; the other three keep their state.
+    if request.headers.get("HX-Request") and requested in view["tables"]:
+        template = (
+            "_stats_states.html" if requested == "states" else "_stats_conversion.html"
+        )
+        return templates.TemplateResponse(
+            request, template, {"table": view["tables"][requested]}
+        )
+    return templates.TemplateResponse(
+        request,
+        "stats.html",
+        {
+            "page": "stats",
+            "honesty": queries.honesty(conn),
+            "health": queries.queue_health(conn),
+            **view,
+        },
+    )
+
+
+@app.post("/theme")
+def set_theme(
+    mode: Annotated[str, Form()], next: Annotated[str, Form()] = "/"
+) -> Response:
+    """Persist the color theme in a cookie. `system` clears it and follows the OS."""
+    if mode not in ("system", "light", "dark"):
+        raise HTTPException(422, "theme is system, light, or dark")
+    # Only same-site relative paths, so the redirect can't be pointed elsewhere.
+    target = next if next.startswith("/") and not next.startswith("//") else "/"
+    response = RedirectResponse(target, status_code=303)
+    if mode == "system":
+        response.delete_cookie("theme", path="/")
+    else:
+        response.set_cookie(
+            "theme", mode, max_age=60 * 60 * 24 * 365, path="/", samesite="lax"
+        )
+    return response
 
 
 def run_dev() -> None:

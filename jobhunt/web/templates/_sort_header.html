@@ -1,0 +1,17 @@
+{# Shared sortable header row for the stats tables. Each table swaps only itself,
+   identified by `table=<prefix>`. #}
+<thead>
+  <tr>
+    {% for h in table.headers %}
+      <th class="{{ 'num' if h.numeric }} {{ 'on' if h.active }}">
+        <a href="/stats?{{ h.query }}"
+           hx-get="/stats?{{ h.query }}&table={{ table.prefix }}"
+           hx-target="#stats-{{ table.prefix }}" hx-swap="outerHTML"
+           hx-push-url="/stats?{{ h.query }}"
+           aria-sort="{% if h.active %}{{ 'ascending' if h.direction == 'asc' else 'descending' }}{% else %}none{% endif %}">
+          {{ h.label }}<span class="caret">{% if h.active %}{{ '↑' if h.direction == 'asc' else '↓' }}{% endif %}</span>
+        </a>
+      </th>
+    {% endfor %}
+  </tr>
+</thead>

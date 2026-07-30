@@ -10,8 +10,8 @@
 <div class="funnel">
   {% for s in PIPELINE_ORDER %}
     {% set n = counts.get(s, 0) %}
-    <a class="step {% if filter_state == s %}on{% endif %} {% if not n %}zero{% endif %}"
-       href="/?state={{ s }}">
+    <a class="step {% if filters.state == s %}on{% endif %} {% if not n %}zero{% endif %}"
+       href="/?{{ funnel[s] }}">
       <div class="n">{{ n }}</div>
       <div class="k">{{ s.replace('_', ' ') }}</div>
     </a>
@@ -20,8 +20,8 @@
 <div class="funnel">
   {% for s in DEAD_ENDS %}
     {% set n = counts.get(s, 0) %}
-    <a class="step {% if filter_state == s %}on{% endif %} {% if not n %}zero{% endif %}"
-       href="/?state={{ s }}">
+    <a class="step {% if filters.state == s %}on{% endif %} {% if not n %}zero{% endif %}"
+       href="/?{{ funnel[s] }}">
       <div class="n">{{ n }}</div>
       <div class="k">{{ s }}</div>
     </a>
@@ -60,51 +60,78 @@
   </div>
 {% endif %}
 
-<h2>
-  {% if filter_state %}{{ filter_state.replace('_', ' ') }}{% else %}All applications{% endif %}
-  {% if filter_state %}<a class="dim" href="/">— clear filter</a>{% endif %}
-</h2>
+<h2>Applications</h2>
 
-{% if applications %}
-<table>
-  <thead>
-    <tr>
-      <th>Company</th>
-      <th>Role</th>
-      <th>State</th>
-      <th>ATS</th>
-      <th>Source</th>
-      <th>Applied</th>
-      <th>Ref</th>
-      <th class="num">WAA</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for a in applications %}
-    <tr>
-      <td><a href="/applications/{{ a.id }}">{{ a.company_name }}</a></td>
-      <td>
-        {{ a.title }}
-        {% if a.location %}<div class="dim">{{ a.location }}{% if a.remote and a.remote != 'unknown' %} · {{ a.remote }}{% endif %}</div>{% endif %}
-      </td>
-      <td><span class="pill {{ a.state }}">{{ a.state.replace('_', ' ') }}</span></td>
-      <td class="dim">{{ a.ats_type or '—' }}</td>
-      <td class="dim">{{ a.source }}</td>
-      <td class="mono dim">{{ (a.applied_at or '')[:10] or '—' }}</td>
-      <td>{% if a.referral_name %}<span class="good">{{ a.referral_name }}</span>{% else %}<span class="dim">—</span>{% endif %}</td>
-      <td class="num">
-        {% if a.would_apply_anyway == 1 %}yes
-        {% elif a.would_apply_anyway == 0 %}<span class="flag">no</span>
-        {% else %}<span class="dim">—</span>{% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{% else %}
-  <p class="empty">
-    Nothing here yet. <a href="/applications/new">Log an application</a> to backfill the
-    ones already submitted by hand.
-  </p>
-{% endif %}
+{# GET so every view is a URL. hx-push-url keeps that URL bookmarkable and
+   reloadable; the same query string renders the full page server-side. #}
+<form class="filters" role="search"
+      hx-get="/" hx-target="#app-table" hx-swap="outerHTML" hx-push-url="true"
+      hx-trigger="change, keyup changed delay:300ms, search">
+  <input type="hidden" id="sort-field" name="sort" value="{{ sort }}">
+  <input type="hidden" id="dir-field" name="dir" value="{{ direction }}">
+
+  <div class="filter search">
+    <label for="q">Search</label>
+    <input id="q" name="q" type="search" value="{{ filters.q }}"
+           placeholder="company, role, or location">
+  </div>
+
+  <div class="filter">
+    <label for="f-state">State</label>
+    <select id="f-state" name="state">
+      <option value="">any</option>
+      {% for s in facets.states %}
+        <option value="{{ s }}" {% if filters.state == s %}selected{% endif %}>{{ s.replace('_', ' ') }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="filter">
+    <label for="f-ats">ATS</label>
+    <select id="f-ats" name="ats">
+      <option value="">any</option>
+      {% for a in facets.ats %}
+        <option value="{{ a }}" {% if filters.ats == a %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="filter">
+    <label for="f-source">Source</label>
+    <select id="f-source" name="source">
+      <option value="">any</option>
+      {% for s in facets.sources %}
+        <option value="{{ s }}" {% if filters.source == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="filter">
+    <label for="f-referral">Referral</label>
+    <select id="f-referral" name="referral">
+      <option value="">any</option>
+      <option value="referred" {% if filters.referral == 'referred' %}selected{% endif %}>referred</option>
+      <option value="cold" {% if filters.referral == 'cold' %}selected{% endif %}>cold</option>
+    </select>
+  </div>
+
+  <div class="filter">
+    <label for="f-waa">Would apply anyway</label>
+    <select id="f-waa" name="waa">
+      <option value="">any</option>
+      <option value="yes" {% if filters.waa == 'yes' %}selected{% endif %}>yes</option>
+      <option value="no" {% if filters.waa == 'no' %}selected{% endif %}>no</option>
+      <option value="unanswered" {% if filters.waa == 'unanswered' %}selected{% endif %}>unanswered</option>
+    </select>
+  </div>
+
+  <div class="filter actions-cell">
+    <noscript><button type="submit">Apply filters</button></noscript>
+    {% if active_filters %}
+      <a class="clear" href="/?{{ clear_query }}">Clear filters</a>
+    {% endif %}
+  </div>
+</form>
+
+{% include "_application_table.html" %}
 {% endblock %}

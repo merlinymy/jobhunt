@@ -13,6 +13,10 @@ from . import config, states
 from .db import transaction
 from .normalize import detect_ats, norm_company_name, norm_title, normalize_apply_url
 
+# Bucket label for an apply URL whose host matches no known ATS. Shared by the
+# stats page and the ATS filter so the two never disagree.
+UNKNOWN_ATS = "other / direct"
+
 # ============================== companies / jobs ==============================
 
 
@@ -181,6 +185,134 @@ def _decorate(row: sqlite3.Row) -> dict[str, Any]:
     return record
 
 
+# ============================ filtering / sorting ============================
+#
+# The applications table is filtered in SQL where the column exists, and in
+# Python where it does not: `ats` is regexed from the apply URL on read. Sorting
+# is entirely in Python so that one rule holds for every column — rows with
+# nothing to sort by trail the list in both directions, instead of flipping to
+# the top on a descending sort the way SQL NULLs do.
+
+# Column key in the URL -> header label. Order matches the table's cells.
+SORTABLE: dict[str, str] = {
+    "company": "Company",
+    "role": "Role",
+    "state": "State",
+    "ats": "ATS",
+    "source": "Source",
+    "applied": "Applied",
+    "ref": "Ref",
+    "waa": "WAA",
+}
+
+# Sorting by state follows the pipeline, not the alphabet: the column is a
+# lifecycle, so `discovered` before `applied` is the only ordering that means
+# anything.
+STATE_RANK: dict[str, int] = {
+    state: rank
+    for rank, state in enumerate(
+        list(states.PIPELINE_ORDER)
+        + sorted(states.TERMINAL.difference(states.PIPELINE_ORDER))
+    )
+}
+
+
+def _sort_value(record: dict[str, Any], column: str) -> Any:
+    """The comparable value for one column, or None when there is nothing to sort."""
+    if column == "company":
+        return (record["company_name"] or "").lower() or None
+    if column == "role":
+        return (record["title"] or "").lower() or None
+    if column == "state":
+        return STATE_RANK.get(record["state"])
+    if column == "ats":
+        return record["ats_type"]
+    if column == "source":
+        return (record["source"] or "").lower() or None
+    if column == "applied":
+        return record["applied_at"]
+    if column == "ref":
+        return (record["referral_name"] or "").lower() or None
+    if column == "waa":
+        return record["would_apply_anyway"]
+    raise ValueError(f"column {column!r} is not sortable")
+
+
+def sort_records(
+    records: list[dict[str, Any]], column: str, direction: str
+) -> list[dict[str, Any]]:
+    ranked = [r for r in records if _sort_value(r, column) is not None]
+    unranked = [r for r in records if _sort_value(r, column) is None]
+    ranked.sort(key=lambda r: _sort_value(r, column), reverse=direction == "desc")
+    # Tie-break and trailing group both fall back to most recent first.
+    unranked.sort(key=lambda r: r["id"], reverse=True)
+    return ranked + unranked
+
+
+def filter_applications(
+    conn: sqlite3.Connection,
+    *,
+    q: str = "",
+    state: str = "",
+    ats: str = "",
+    source: str = "",
+    referral: str = "",
+    waa: str = "",
+    sort: str = "applied",
+    direction: str = "desc",
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    where: list[str] = []
+    params: list[Any] = []
+
+    if state:
+        where.append("a.state = ?")
+        params.append(state)
+    if source:
+        where.append("j.source = ?")
+        params.append(source)
+    if referral == "referred":
+        where.append("a.referral_contact_id IS NOT NULL")
+    elif referral == "cold":
+        where.append("a.referral_contact_id IS NULL")
+    if waa == "yes":
+        where.append("a.would_apply_anyway = 1")
+    elif waa == "no":
+        where.append("a.would_apply_anyway = 0")
+    elif waa == "unanswered":
+        where.append("a.would_apply_anyway IS NULL")
+    if q:
+        where.append(
+            "(c.name LIKE ? OR j.title LIKE ? OR IFNULL(j.location, '') LIKE ?)"
+        )
+        params.extend([f"%{q}%"] * 3)
+
+    sql = _APPLICATION_SELECT
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    records = [_decorate(row) for row in conn.execute(sql, params)]
+
+    if ats:
+        records = [r for r in records if (r["ats_type"] or UNKNOWN_ATS) == ats]
+
+    # Sort before slicing, or the cap would silently change what the sort means.
+    return sort_records(records, sort, direction)[:limit]
+
+
+def facets(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """Values actually present, so the filters never offer an empty result."""
+    rows = conn.execute(
+        "SELECT a.state, j.source, j.apply_url FROM applications a JOIN jobs j ON j.id = a.job_id"
+    ).fetchall()
+    return {
+        "states": sorted(
+            {row["state"] for row in rows}, key=lambda s: STATE_RANK.get(s, 99)
+        ),
+        "sources": sorted({row["source"] for row in rows if row["source"]}),
+        "ats": sorted({detect_ats(row["apply_url"])[0] or UNKNOWN_ATS for row in rows}),
+    }
+
+
 def state_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         row["state"]: row["n"]
@@ -281,7 +413,7 @@ def conversion_by(conn: sqlite3.Connection, dimension: str) -> list[dict[str, An
     buckets: dict[str, dict[str, Any]] = {}
     for row in rows:
         if dimension == "ats":
-            key = detect_ats(row["apply_url"])[0] or "other / direct"
+            key = detect_ats(row["apply_url"])[0] or UNKNOWN_ATS
         elif dimension == "source":
             key = row["source"] or "unknown"
         elif dimension == "referral":
@@ -306,6 +438,61 @@ def conversion_by(conn: sqlite3.Connection, dimension: str) -> list[dict[str, An
 
     ordered = sorted(buckets.values(), key=lambda b: (-b["applied"], b["label"]))
     return [_finish(bucket) for bucket in ordered]
+
+
+# Conversion table columns. `label` is the bucket name, whose header text differs
+# per table (ATS / Source / Referral) and is supplied by the caller.
+CONVERSION_SORTABLE: dict[str, str] = {
+    "label": "",
+    "tracked": "Tracked",
+    "applied": "Applied",
+    "responses": "Responses",
+    "interviews": "Interviews",
+    "offers": "Offers",
+    "ghosted": "Ghosted",
+    "response_rate": "Response rate",
+    "interview_rate": "Interview rate",
+}
+
+STATE_TABLE_SORTABLE: dict[str, str] = {"state": "State", "count": "Applications"}
+
+
+def sort_buckets(
+    buckets: list[dict[str, Any]], column: str, direction: str
+) -> list[dict[str, Any]]:
+    """Sort conversion rows, same rule as the applications table.
+
+    A rate is None for a bucket nothing was submitted to; those rows trail in
+    both directions rather than claiming to be the best or worst performer.
+    """
+    if column not in CONVERSION_SORTABLE:
+        column = "applied"
+    key = (
+        (lambda b: b["label"].lower())
+        if column == "label"
+        else (lambda b: b[column])
+    )
+    ranked = [b for b in buckets if b[column] is not None]
+    unranked = [b for b in buckets if b[column] is None]
+    ranked.sort(key=key, reverse=direction == "desc")
+    unranked.sort(key=lambda b: b["label"].lower())
+    return ranked + unranked
+
+
+def state_rows(
+    conn: sqlite3.Connection, column: str = "state", direction: str = "asc"
+) -> list[dict[str, Any]]:
+    """Every state with its count, sorted by pipeline position or by count."""
+    counts = state_counts(conn)
+    rows = [
+        {"state": state, "count": counts.get(state, 0), "rank": rank}
+        for state, rank in STATE_RANK.items()
+    ]
+    key = (
+        (lambda r: r["rank"]) if column != "count" else (lambda r: (r["count"], -r["rank"]))
+    )
+    rows.sort(key=key, reverse=direction == "desc")
+    return rows
 
 
 def honesty(conn: sqlite3.Connection) -> dict[str, Any]:

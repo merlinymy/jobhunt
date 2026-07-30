@@ -1,18 +1,32 @@
-/* No build step, no bundler. One stylesheet, system fonts. */
+/* No build step, no bundler. One stylesheet, system fonts.
+ *
+ * Theming: every token is a light-dark() pair, so the palette is declared once
+ * and `color-scheme` decides which half applies. :root follows the OS; the
+ * data-theme attribute (set from the theme cookie) pins one. No duplicated token
+ * blocks, no flash-of-wrong-theme script, no JS at all.
+ *
+ * Semantic colors are set as `color` on pills and mixed into their own border
+ * and background with color-mix, so a variant declares one value and reads
+ * correctly against either background. */
 
 :root {
-  --bg: #12131a;
-  --panel: #1b1d27;
-  --panel-2: #22252f;
-  --line: #30343f;
-  --ink: #e7e9ee;
-  --dim: #969cab;
-  --accent: #8fb8ff;
-  --good: #7fd1a0;
-  --warn: #e8c07d;
-  --bad: #e89a9a;
+  color-scheme: light dark;
+
+  --bg:      light-dark(#eef1f6, #12131a);
+  --panel:   light-dark(#ffffff, #1b1d27);
+  --panel-2: light-dark(#f4f6fa, #22252f);
+  --line:    light-dark(#d5dbe6, #30343f);
+  --ink:     light-dark(#191d27, #e7e9ee);
+  --dim:     light-dark(#5a6474, #969cab);
+  --accent:  light-dark(#2b5bb5, #8fb8ff);
+  --good:    light-dark(#16714a, #7fd1a0);
+  --warn:    light-dark(#8a5710, #e8c07d);
+  --bad:     light-dark(#a3323c, #e89a9a);
   --radius: 8px;
 }
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
@@ -59,6 +73,36 @@ h2 { font-size: 15px; margin: 32px 0 10px; text-transform: uppercase;
      letter-spacing: 0.07em; color: var(--dim); }
 h3 { font-size: 14px; margin: 0 0 10px; color: var(--dim); }
 p.sub { color: var(--dim); margin: 0 0 24px; }
+
+/* ---------- theme switch ---------- */
+
+.theme {
+  display: flex;
+  gap: 0;
+  align-self: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.theme button {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.theme button + button { border-left: 1px solid var(--line); }
+.theme button:hover { color: var(--ink); background: var(--panel-2); }
+.theme button.on {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
 
 /* ---------- funnel ---------- */
 
@@ -108,6 +152,10 @@ tr:last-child td { border-bottom: 0; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 0; }
 .empty { color: var(--dim); padding: 24px 0; }
 
+/* Wide stats tables scroll rather than squeezing the numbers. */
+.scroller { overflow-x: auto; }
+.scroller table { min-width: 720px; }
+
 /* ---------- state pills ---------- */
 
 .pill {
@@ -117,22 +165,23 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; padding-
   letter-spacing: 0.03em;
   padding: 3px 8px;
   border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
   color: var(--dim);
+  border: 1px solid color-mix(in oklab, currentColor 35%, transparent);
+  background: color-mix(in oklab, currentColor 12%, transparent);
   white-space: nowrap;
 }
-.pill.applied     { color: var(--accent); border-color: #3c5482; }
-.pill.interview   { color: var(--warn);   border-color: #6b5730; }
-.pill.offer       { color: var(--good);   border-color: #35624a; }
+.pill.applied      { color: var(--accent); }
+.pill.interview    { color: var(--warn); }
+.pill.offer        { color: var(--good); }
+.pill.packet_ready { color: var(--good); }
 .pill.rejected,
 .pill.skipped,
 .pill.filtered,
-.pill.expired     { color: var(--bad);    border-color: #6b3f3f; }
-.pill.packet_ready { color: var(--good);  border-color: #35624a; }
+.pill.expired      { color: var(--bad); }
 
 .flag { color: var(--warn); }
 .dim { color: var(--dim); }
+.good { color: var(--good); }
 .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
 
 /* ---------- forms ---------- */
@@ -153,7 +202,7 @@ label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 5px; 
 label .req { color: var(--warn); }
 
 input[type=text], input[type=url], input[type=date], input[type=number],
-select, textarea {
+input[type=search], select, textarea {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--line);
@@ -181,15 +230,21 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--accent); color: var(--accent); }
-button.primary { background: #2b3d63; border-color: #3c5482; color: #dbe6ff; }
-button.primary:hover { background: #334874; color: #fff; }
+button.primary {
+  background: color-mix(in oklab, var(--accent) 18%, var(--panel));
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+button.primary:hover {
+  background: color-mix(in oklab, var(--accent) 28%, var(--panel));
+}
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .hint { font-size: 12px; color: var(--dim); margin: 6px 0 0; }
 
 .error {
-  border: 1px solid #6b3f3f;
-  background: #2a1f22;
-  color: #f0c4c4;
+  border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent);
+  background: color-mix(in oklab, var(--bad) 12%, var(--panel));
+  color: var(--bad);
   border-radius: var(--radius);
   padding: 12px 14px;
   margin-bottom: 18px;
@@ -202,8 +257,75 @@ button.primary:hover { background: #334874; color: #fff; }
   font-size: 13px;
   margin-top: 8px;
 }
-.notice.ok { border-color: #35624a; }
-.notice.dup { border-color: #6b5730; color: var(--warn); }
+.notice.ok  { border-color: color-mix(in oklab, var(--good) 45%, transparent); }
+.notice.dup { border-color: color-mix(in oklab, var(--warn) 45%, transparent);
+              color: var(--warn); }
+
+/* ---------- filter bar ---------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: end;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.filter { flex: 0 1 150px; min-width: 0; }
+.filter.search { flex: 1 1 240px; }
+.filter label { margin-bottom: 4px; }
+.filter select, .filter input { padding: 6px 8px; font-size: 13.5px; }
+
+.actions-cell { flex: 0 0 auto; padding-bottom: 2px; }
+.filters .clear { font-size: 13px; color: var(--dim); }
+.filters .clear:hover { color: var(--accent); }
+
+.table-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--dim);
+  padding: 0 0 8px;
+}
+.table-meta strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---------- sortable headers ---------- */
+
+.sortable-table th { padding: 0 10px 8px 0; }
+.sortable-table th:last-child { padding-right: 0; }
+
+.sortable-table th a {
+  color: var(--dim);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  font: inherit;
+}
+.sortable-table th a:hover { color: var(--ink); text-decoration: none; }
+.sortable-table th.on a { color: var(--accent); }
+.sortable-table th.num a { flex-direction: row-reverse; }
+
+/* Reserve the caret's width so a sort click doesn't shift the header row. */
+.caret { display: inline-block; min-width: 8px; font-size: 10px; }
+
+a:focus-visible, button:focus-visible, .step:focus-visible,
+input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
 
 /* ---------- timeline ---------- */
 

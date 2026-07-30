@@ -1,0 +1,75 @@
+{# Swapped by the filter bar and the sort headers. Full page re-renders it too. #}
+<div id="app-table">
+  <div class="table-meta">
+    <span>
+      <strong>{{ applications|length }}</strong>
+      application{{ '' if applications|length == 1 else 's' }}
+      {%- if active_filters %}
+        · {{ active_filters }} filter{{ '' if active_filters == 1 else 's' }} on
+      {%- endif %}
+    </span>
+    <span class="dim">
+      sorted by {{ headers|selectattr('active')|map(attribute='label')|first|lower }},
+      {{ 'ascending' if direction == 'asc' else 'descending' }}
+    </span>
+  </div>
+
+  {% if applications %}
+  <table class="sortable-table">
+    <thead>
+      <tr>
+        {% for h in headers %}
+          <th class="{{ 'num' if h.column == 'waa' }} {{ 'on' if h.active }}">
+            <a href="/?{{ h.query }}"
+               hx-get="/?{{ h.query }}" hx-target="#app-table" hx-swap="outerHTML"
+               hx-push-url="true"
+               aria-sort="{% if h.active %}{{ 'ascending' if h.direction == 'asc' else 'descending' }}{% else %}none{% endif %}">
+              {{ h.label }}<span class="caret">{% if h.active %}{{ '↑' if h.direction == 'asc' else '↓' }}{% endif %}</span>
+            </a>
+          </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in applications %}
+      <tr>
+        <td><a href="/applications/{{ a.id }}">{{ a.company_name }}</a></td>
+        <td>
+          {{ a.title }}
+          {% if a.location %}<div class="dim">{{ a.location }}{% if a.remote and a.remote != 'unknown' %} · {{ a.remote }}{% endif %}</div>{% endif %}
+        </td>
+        <td><span class="pill {{ a.state }}">{{ a.state.replace('_', ' ') }}</span></td>
+        <td class="dim">{{ a.ats_type or '—' }}</td>
+        <td class="dim">{{ a.source }}</td>
+        <td class="mono dim">{{ (a.applied_at or '')[:10] or '—' }}</td>
+        <td>{% if a.referral_name %}{{ a.referral_name }}{% else %}<span class="dim">—</span>{% endif %}</td>
+        <td class="num">
+          {% if a.would_apply_anyway == 1 %}yes
+          {% elif a.would_apply_anyway == 0 %}<span class="flag">no</span>
+          {% else %}<span class="dim">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif active_filters %}
+    <p class="empty">
+      No application matches these filters.
+      <a href="/?{{ clear_query }}">Clear them</a>
+      to see everything.
+    </p>
+  {% else %}
+    <p class="empty">
+      Nothing tracked yet. <a href="/applications/new">Log an application</a> to backfill
+      the ones already submitted by hand.
+    </p>
+  {% endif %}
+</div>
+
+{% if oob %}
+  {# Sorting swaps the table alone, so the form's copy of the ordering has to be
+     corrected out of band or the next filter change would reset the sort. Only
+     emitted on HTMX responses — on a full page the form already carries these. #}
+  <input type="hidden" id="sort-field" name="sort" value="{{ sort }}" hx-swap-oob="true">
+  <input type="hidden" id="dir-field" name="dir" value="{{ direction }}" hx-swap-oob="true">
+{% endif %}

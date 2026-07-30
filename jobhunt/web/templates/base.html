@@ -1,5 +1,10 @@
+{# The theme is read straight from the cookie here rather than passed by every
+   route. Unrecognized values fall back to following the OS. #}
+{% set cookie_theme = request.cookies.get('theme') %}
+{% set theme = cookie_theme if cookie_theme in ('light', 'dark') else 'system' %}
+{% set here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 <!doctype html>
-<html lang="en">
+<html lang="en"{% if theme != 'system' %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,6 +19,18 @@
       <a href="/" {% if page == 'pipeline' %}class="on"{% endif %}>Pipeline</a>
       <a href="/applications/new" {% if page == 'new' %}class="on"{% endif %}>Log application</a>
       <a href="/stats" {% if page == 'stats' %}class="on"{% endif %}>Stats</a>
+
+      {# POST because it changes stored state; one form, three submit buttons, so
+         it stays a plain HTML control with no script. #}
+      <form class="theme" method="post" action="/theme" aria-label="Color theme">
+        <input type="hidden" name="next" value="{{ here }}">
+        <button name="mode" value="system" class="{{ 'on' if theme == 'system' }}"
+                aria-pressed="{{ 'true' if theme == 'system' else 'false' }}">Auto</button>
+        <button name="mode" value="light" class="{{ 'on' if theme == 'light' }}"
+                aria-pressed="{{ 'true' if theme == 'light' else 'false' }}">Light</button>
+        <button name="mode" value="dark" class="{{ 'on' if theme == 'dark' }}"
+                aria-pressed="{{ 'true' if theme == 'dark' else 'false' }}">Dark</button>
+      </form>
     </nav>
   </header>
   <main>
