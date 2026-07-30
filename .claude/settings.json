@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(uv *)",
+      "Bash(python -m *)",
+      "Bash(sqlite3 *)",
+      "Bash(ollama *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(make migrate)",
+      "Bash(rm *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Read(./.env)",
+      "Read(./credentials.json)",
+      "Read(./token.json)",
+      "Read(./*.db)"
+    ]
+  }
+}
