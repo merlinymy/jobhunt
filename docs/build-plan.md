@@ -1,32 +1,33 @@
 # Build Plan
 
 Ordered to front-load value and defer nothing brittle. Check boxes off as work completes.
-Do not start a phase before the previous phase's gate passes.
+Gates are about not building on a broken foundation, not about strict ordering. Phase 0 runs
+in parallel throughout. Phases 1 and 2 can proceed immediately.
 
-## Phase 0 — seed from real forms
+## Phase 0 — runs in parallel, blocks almost nothing
 
-Right-sized: since every application is manual, this is a head start, not a gate. The point is
-that the packet has real fields to show on day one instead of guesses.
+Not a gate. Apply to jobs because you want the applications anyway; log the questions as you
+hit them. The only thing that actually waits on this is Phase 3's seed content — and even
+Phase 3's _code_ can be built against a few guessed questions.
 
-- [ ] Apply to 3–4 jobs by hand, ideally across different ATS
-- [ ] Log **only the questions that surprised you** — verbatim wording
-- [ ] Fill `docs/profile/facts.yaml` (sections A, H)
-- [ ] Fill `docs/profile/scoring.yaml` (section B)
+- [ ] Apply to jobs by hand, ideally across different ATS. Ongoing.
+- [ ] Log **only the questions that surprised you**, verbatim, as you encounter them
+- [ ] Fill the `identity` block of `docs/profile/facts.yaml` — 5 minutes, Phase 2 needs it
+- [ ] Fill `docs/profile/scoring.yaml` — thinking work, ~1 hour, Phase 4 is only as good as it
+- [ ] Start `docs/profile/experience.yaml` (intake section C) — **the long pole.** Several
+      hours, gated on nothing, and Phase 2 stalls without it.
 
-The recurring question set is small and converges fast. Anything missed gets caught by
-`unknown_questions` later, permanently.
-
-**Gate:** `facts.yaml` and `scoring.yaml` are filled in, and I have the wording of the
-non-obvious questions.
+**Real dependencies:** Phases 1, 2, 4, and 5 need none of the applications. Phase 3 needs real
+question wording for its seed data. Phase 5 benefits from real rejection emails as fixtures.
 
 ## Phase 1 — DB and dashboard
 
-- [ ] `migrations/001_init.sql` applied; `make migrate` works
-- [ ] Thin query module over `sqlite3`; no ORM
-- [ ] State-transition helper that rejects pairs absent from the transition table
-- [ ] FastAPI + Jinja + HTMX dashboard on localhost
-- [ ] Manual application entry form
-- [ ] Stats page: conversion by ATS, by source, by referral status, `would_apply_anyway` ratio
+- [x] `migrations/001_init.sql` applied; `make migrate` works
+- [x] Thin query module over `sqlite3`; no ORM
+- [x] State-transition helper that rejects pairs absent from the transition table
+- [x] FastAPI + Jinja + HTMX dashboard on localhost
+- [x] Manual application entry form
+- [x] Stats page: conversion by ATS, by source, by referral status, `would_apply_anyway` ratio
 - [ ] Backfill the 10 Phase 0 applications
 
 **Gate:** I can log an application by hand and see conversion stats.
