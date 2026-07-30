@@ -12,6 +12,7 @@ Read on demand, not every session:
 - `docs/architecture.md` — state machine, components, algorithms, packet design
 - `docs/build-plan.md` — phases, gates, current status (check boxes off as work completes)
 - `migrations/` — schema, source of truth
+- `config/models.yaml` — which model runs which task, and why
 - `docs/intake.md` — profile questionnaire; answers go in `docs/profile/`
 - `docs/profile/` — my actual profile data. **Source of truth**, hand-edited, versioned.
 
@@ -56,14 +57,17 @@ assertions that raise over tests that assert whatever the code currently does.
 
 ## Model routing
 
-| Task | Model |
-| --- | --- |
-| Resume tailoring, narrative answers | frontier API, Opus-class |
-| Job scoring pass 2, email classification | local Ollama, `qwen2.5:14b` |
-| Dedup, normalization, prefilter, routing, ATS detection | no LLM — deterministic |
+API for everything. No local models — measured cost at ~100 applications/month is ~$14/mo
+all-Opus, ~$8/mo with Haiku on bulk tasks. Not worth the RAM, latency, or the dependency.
 
-All frontier calls go through one wrapper module. Log prompt, response, token counts, cost,
-and latency to `llm_calls` on every call.
+Model per task lives in `config/models.yaml`. **Never hardcode a model ID at a call site.**
+All calls go through one `llm.py` with a `complete(task, prompt)` signature, so swapping
+tiers — or adding an Ollama backend later — is a config change, not a refactor.
+
+Cost levers in order of real impact: prompt caching first (the profile corpus is
+byte-identical across every call), then the Batch API for scoring, then model tier last.
+
+Log prompt, response, token counts, cost, and latency to `llm_calls` on every call.
 
 ## Commands
 
@@ -93,12 +97,20 @@ make chat          # gap-filling: resolve unknown_questions, append answers
 
 ## Environment gotchas
 
-- macOS host: launchd, not systemd. Scheduled jobs need a logged-in GUI session.
+I develop on three Macs (8 GB laptop, 24 GB laptop, 24 GB mini) but **only the Mac mini runs
+the app.** It holds the DB, the launchd jobs, and the dashboard. The laptops are dev clients.
+
+- **Never put the SQLite file on iCloud Drive, Dropbox, or any sync service.** WAL mode plus
+  file-level sync corrupts the database. The DB stays on the mini's local disk.
+- **One writer host.** Laptops read and write through the mini's HTTP API over Tailscale,
+  never by opening the DB file over a share. For local dev, use a throwaway seeded DB.
+- Profile data syncs between machines through git (`docs/profile/`), not through the DB.
+  Keep this repo **private** — those files hold my address, salary expectations, and EEO answers.
+- On the mini: launchd, not cron or systemd. Scheduled jobs need a logged-in GUI session.
 - Default Mac sleep silently kills the 8am digest: `sudo pmset -a sleep 0 disablesleep 1`.
 - Telegram uses long polling. No webhook, no port forwarding, no tunnel, no static IP.
-- Never bind FastAPI beyond localhost. Phone access is via Tailscale only.
+- Never bind FastAPI beyond localhost. Cross-machine and phone access is Tailscale only.
 - SQLite in WAL mode. The DB holds every submitted PDF — back it up off-box nightly.
-- Ollama must be running before `make score` or `make inbox`.
 
 ## Watch for
 

@@ -5,35 +5,54 @@ next. No message broker, no Airflow, no queue — a `state` column and launchd.
 
 ## State machine
 
-```
-discovered → scored → job_approved → packet_ready → applied → rejected | interview | offer
-                ↓          ↓              ↓
-             filtered   skipped        expired
-```
+Transitions are enumerated rather than drawn — column-aligned ASCII was ambiguous about which
+state each branch hangs off, and got two of them wrong.
+
+| From | To | Trigger |
+| --- | --- | --- |
+| — | `discovered` | `ingest` finds a new job and it survives dedup |
+| `discovered` | `filtered` | deterministic prefilter rejects it — **terminal** |
+| `discovered` | `scored` | prefilter passes, LLM assigns score + reasoning |
+| `scored` | `skipped` | I decline it in the digest — **terminal** |
+| `scored` | `job_approved` | I approve it in the digest |
+| `job_approved` | `expired` | posting gone before the packet was built — **terminal** |
+| `job_approved` | `packet_ready` | `tailor` renders the resume and resolves answers |
+| `packet_ready` | `expired` | posting gone before I submitted — **terminal** |
+| `packet_ready` | `applied` | I tap "I applied", or a confirmation email arrives |
+| `applied` | `rejected` | inbox classification or manual — **terminal** |
+| `applied` | `interview` | inbox classification or manual |
+| `interview` | `offer` | manual |
+| `interview` | `rejected` | post-interview rejection — **terminal** |
+| `offer` | — | **terminal** |
+
+Note `applied → offer` is not a valid transition; an offer always passes through `interview`.
 
 | State | Meaning |
 | --- | --- |
 | `discovered` | ingested, deduped, not yet scored |
 | `scored` | has score + reasoning, awaiting my review in the digest |
-| `filtered` | killed by the deterministic prefilter (terminal, retained for stats) |
+| `filtered` | killed by the deterministic prefilter (retained for stats) |
 | `job_approved` | I said yes in the Telegram digest |
-| `skipped` | I said no (terminal) |
+| `skipped` | I said no |
 | `packet_ready` | tailored resume + answer set generated, ready for me to submit |
-| `expired` | posting disappeared before I applied (terminal) |
+| `expired` | posting disappeared before I applied |
 | `applied` | I submitted it; `applied_at` set |
 | `rejected` / `interview` / `offer` | from inbox classification or manual update |
 
-Every transition writes an `events` row with `from_state` and `to_state`.
+Every transition writes an `events` row with `from_state` and `to_state`. The transition
+helper should reject any pair not in the table above rather than trusting callers.
 
 ## Workers
 
 | Module | Trigger | Responsibility |
 | --- | --- | --- |
 | `ingest` | launchd, 2×/day | JobSpy (Indeed, Google) → normalize → dedup → `discovered` |
-| `score` | after ingest | deterministic prefilter, then local LLM on survivors |
+| `score` | after ingest | deterministic prefilter, then LLM scoring on survivors (batch) |
 | `digest` | launchd, 8am weekdays | Telegram: top ~8 `scored`, inline approve/skip buttons |
 | `tailor` | on `job_approved` | render resume PDF + resolve answer set → `packet_ready` |
 | `inbox` | launchd, hourly | Gmail API → classify → write events, close forgotten `applied` |
+
+Only the Mac mini runs these. See Deployment below.
 | `dashboard` | always on | packet view, "I applied" button, stats, manual entry |
 | `load-profile` | on demand | import `docs/profile/*` into SQLite; idempotent upsert |
 | `chat` | on demand | gap-filling only — resolves `unknown_questions`, appends to `answers` |
@@ -70,8 +89,9 @@ Two passes.
 band, location and remote rules, comp floor, company blocklist, hard exclusions (clearance
 required, unpaid, commission-only, staffing agencies).
 
-**Pass 2, local LLM.** Survivors get my profile summary plus the JD and return a 0–100 score
-with two sentences of reasoning.
+**Pass 2, LLM.** Survivors get my profile summary plus the JD and return a 0–100 score with
+two sentences of reasoning. Runs through the Batch API — it isn't latency-sensitive, it just
+has to finish before the 8am digest. The profile summary is cached across all calls.
 
 Score never auto-advances state. It orders the digest, nothing more.
 
@@ -109,3 +129,24 @@ on long-context DOM reasoning, and frontier models make control the dominant tok
 (~15 steps × ~15k context × 100 applications/month). Against that, manual filling costs ~10
 minutes and carries zero ToS exposure, zero selector maintenance, and no anti-bot arms race.
 The tedium worth automating turned out to be the answer bank, not the clicking.
+
+## Deployment
+
+Three dev machines, one host.
+
+- **Mac mini (24 GB)** — the only machine that runs the app. Holds `jobhunt.db`, the launchd
+  timers, and the dashboard. Always on, sleep disabled.
+- **Laptops (8 GB, 24 GB)** — dev clients. Clone the repo, edit code and `docs/profile/`,
+  push through git. To use the app, hit the mini's dashboard over Tailscale.
+
+Constraints that follow:
+
+- **One writer.** The mini's process is the only thing that opens the DB file. Laptops go
+  through HTTP. SQLite over a network share or a sync folder corrupts under WAL.
+- **No DB in git and no DB in iCloud.** It holds BLOBs of every submitted PDF. Back it up
+  off-box with a nightly copy, not by syncing the live file.
+- **Profile data syncs via git**, which is the reason `docs/profile/` is committed rather than
+  living only in the DB. Keep the repo private — those files contain my address, phone,
+  salary expectations, and EEO answers.
+- **`CLAUDE.local.md` is per-machine** and gitignored, so each Mac carries its own paths. The
+  8 GB laptop should not attempt to run anything heavier than the editor.

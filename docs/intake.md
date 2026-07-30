@@ -27,33 +27,31 @@ re-runnable, so fill them incrementally.
 
 ---
 
-## A. Identity and logistics
-*→ `profile_facts`. Tier: fact. Exact values, decided once, returned verbatim. Never generated.*
+## A. Identity and decided-once answers
+*→ `docs/profile/facts.yaml`. Two jobs: feed the resume header, and store answers I'd
+otherwise improvise differently each time. Since I fill forms by hand, the test for a field
+is **would I have to decide or look this up?** If I'd type it from memory, it's not here.*
 
-1. Legal name exactly as it appears on your ID and tax documents. Preferred name if different.
-2. Email you want on applications. Phone with country code.
-3. Current city, state, ZIP. Full street address (some ATS require it).
-4. Are you open to relocation? If yes, which metros — and would you need relocation assistance?
-5. Are you legally authorized to work in the US? *(Exact yes/no — this is a knockout question.)*
-6. Will you now or in the future require visa sponsorship? *(Also a knockout. Answer precisely.)*
-7. If on a visa: type, expiry, and any timeline pressure worth knowing.
-8. LinkedIn URL, GitHub, portfolio, personal site, Google Scholar — whichever apply.
-9. **Salary:** your target number, your acceptable floor, and the exact sentence you use when a
-   form demands a single figure. Decide this once so you never answer two ways for one company.
-10. Earliest start date / notice period.
-11. Currently employed? May we contact your current employer? *(Usually no.)*
-12. Onsite tolerance: fully remote only, hybrid (how many days), or onsite acceptable?
-13. Travel willingness, as a percentage.
-14. Security clearance: any active or previously held? Willing to undergo?
-15. **EEO questions** — gender, race/ethnicity, veteran status, disability status. These are
-    voluntary, used for aggregate reporting, and not shown to hiring managers; declining is
-    normal and standard. Decide your answer once, including "prefer not to disclose," so it's
-    consistent everywhere.
-16. Your default answer to "How did you hear about us?"
-17. **References:** name, title, company, email, phone, relationship — and have they agreed?
-18. Do you have a driver's license? Any professional licenses or certifications with numbers?
+1. Legal name exactly as on your ID and tax documents. Preferred name if different.
+2. Email and phone you want on applications. City and state. *(Resume header.)*
+3. LinkedIn, GitHub, portfolio, personal site — whichever you'd actually put on a resume.
+4. Are you legally authorized to work in the US? *(Exact yes/no. Knockout question.)*
+5. Will you now or in the future require sponsorship? *(Also knockout. Answer precisely.)*
+   If on a visa: type, expiry, timeline pressure.
+6. **Salary:** target, floor, and the exact sentence you use when a form demands one figure.
+   You'll type a number ~100 times; decide it once.
+7. Earliest start date and notice period.
+8. Onsite tolerance — remote only, hybrid (how many days), or onsite acceptable?
+9. Relocation — open to it? Which metros? Would you need assistance?
+10. Security clearance, if you hold one or expect to be asked.
+11. **References:** name, title, company, email, phone, relationship — and have they agreed?
+    *(Rarely requested, always annoying to hunt down mid-application.)*
 
----
+**Deliberately not collected:** street address, EEO responses, travel percentage, "how did you
+hear about us," license numbers, driver's license. Your password manager's identity autofill
+handles those on the actual form better than this system would, and no one cross-references
+them between applications. EEO in particular is voluntary, aggregate-only, and separated from
+your application — there's nothing to keep consistent.
 
 ## B. What "suits me" means
 *→ scoring config for `score.py` pass 1. This is deterministic filtering, so be strict — the
@@ -184,8 +182,8 @@ in a form field at 11pm.*
   and commit history open — you have forgotten most of your own metrics.
 - **E and F reward being written out longhand**, then compressed by the system. Don't
   pre-summarize; you'll strip out the specifics that make the output non-generic.
-- **Decide once, then freeze:** salary phrasing, EEO answers, sponsorship answer, gap
+- **Decide once, then freeze:** salary phrasing, sponsorship answer, gap
   explanations. Inconsistency across applications to the same company is a real cost.
-- **Expect this list to be incomplete.** Phase 0 — applying to ten jobs by hand and logging
-  every field verbatim — is what turns this into the actual taxonomy. Anything a real form
+- **Expect this list to be incomplete.** Phase 0 — applying to 3–4 jobs by hand and logging
+  the questions that surprised you — is what turns this into the actual taxonomy. Anything a real form
   asks that isn't here goes into `unknown_questions` and gets added.

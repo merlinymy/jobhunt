@@ -1,0 +1,37 @@
+# Model routing. Change a value here, not a call site — llm.py reads this.
+# Rates as of 2026-07-30, $/million tokens in/out:
+#   claude-haiku-4-5-20251001   $1 / $5
+#   claude-sonnet-5             $2 / $10  (intro rate; goes to $3/$15 on 2026-09-01)
+#   claude-opus-5               $5 / $25
+# Measured cost at ~100 applications/month: all-opus ~$14, haiku-bulk mixed ~$8.
+
+provider: anthropic          # anthropic | ollama  (ollama unimplemented; see note below)
+
+tasks:
+  tailor:
+    model: claude-opus-5     # quality-critical, ~100 calls/mo, drives callbacks
+    max_tokens: 2000
+    cache_profile: true      # profile corpus is identical every call
+  narrative:
+    model: claude-opus-5     # "why this company"; cached per company after first call
+    max_tokens: 1000
+    cache_profile: true
+  score:
+    model: claude-haiku-4-5-20251001   # ~600 calls/mo, I review the ranking anyway
+    max_tokens: 200
+    cache_profile: true
+    batch: true              # not latency-sensitive; runs before the 8am digest
+  classify_email:
+    model: claude-haiku-4-5-20251001
+    max_tokens: 100
+    batch: false             # hourly, low volume, keep it simple
+
+# Cost levers, in order of actual impact for this workload:
+#   1. Prompt caching — the profile corpus is byte-identical across all 700 calls/mo.
+#      Cache hits bill at 10% of base input. Bigger lever than model tier.
+#   2. Batch API — 50% off, stacks with caching. Scoring is the obvious candidate.
+#   3. Model tier — only worth touching if 1 and 2 aren't enough.
+#
+# Swapping to local later: implement an `ollama` provider behind the same
+# complete(task, prompt) signature and flip `provider`. Do NOT build that
+# abstraction now — just never hardcode a model ID outside this file.

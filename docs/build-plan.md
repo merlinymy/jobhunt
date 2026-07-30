@@ -23,6 +23,7 @@ non-obvious questions.
 
 - [ ] `migrations/001_init.sql` applied; `make migrate` works
 - [ ] Thin query module over `sqlite3`; no ORM
+- [ ] State-transition helper that rejects pairs absent from the transition table
 - [ ] FastAPI + Jinja + HTMX dashboard on localhost
 - [ ] Manual application entry form
 - [ ] Stats page: conversion by ATS, by source, by referral status, `would_apply_anyway` ratio
@@ -61,7 +62,7 @@ rather than silently dropped.
 - [ ] URL normalization + hard and soft dedup
 - [ ] `contacts` seeded from `docs/profile/contacts.csv` (LinkedIn export + hand additions)
 - [ ] Pass 1 deterministic prefilter driven by `docs/profile/scoring.yaml`
-- [ ] Pass 2 local LLM scoring via Ollama
+- [ ] Pass 2 LLM scoring via Batch API, model from `config/models.yaml`
 - [ ] Telegram digest, top ~8, inline approve/skip, referral flag surfaced
 - [ ] launchd plists for ingest, score, digest
 
@@ -71,7 +72,7 @@ rather than silently dropped.
 ## Phase 5 — inbox poller
 
 - [ ] Gmail API OAuth flow completed, `credentials.json` in place
-- [ ] Local LLM classification: rejection / interview / confirmation / noise
+- [ ] LLM classification: rejection / interview / confirmation / noise
 - [ ] Events written, states advanced, `first_response_at` set
 - [ ] Confirmation-email backstop closes forgotten `applied` rows
 - [ ] launchd plist, hourly
