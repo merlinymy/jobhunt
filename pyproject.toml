@@ -1,0 +1,32 @@
+[project]
+name = "jobhunt"
+version = "0.1.0"
+description = "Personal job-search pipeline: discover, score, tailor a packet, track outcomes."
+requires-python = ">=3.12"
+
+# Four libraries plus our own code. Telegram is long-polled with stdlib urllib —
+# a bot wrapper is not worth a dependency for one sendMessage and one getUpdates.
+dependencies = [
+  "fastapi>=0.115",         # dashboard
+  "uvicorn>=0.30",          # dashboard server
+  "jinja2>=3.1",            # templates
+  "python-multipart>=0.0.9",# form posts
+  "pyyaml>=6.0",            # docs/profile/*.yaml, config/models.yaml
+]
+
+[project.optional-dependencies]
+# Installed when the phase lands, not before. Keeps the dashboard install light.
+llm = ["anthropic>=0.40"]                      # Phase 2/4/5 — llm.py
+resume = ["rendercv>=1.16"]                    # Phase 2 — master data -> PDF
+ingest = ["python-jobspy>=1.1.70"]             # Phase 4 — discovery
+inbox = [                                      # Phase 5 — Gmail poller
+  "google-api-python-client>=2.140",
+  "google-auth-oauthlib>=1.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["jobhunt"]
