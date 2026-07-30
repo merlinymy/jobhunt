@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Pipeline — jobhunt{% endblock %}
+
+{% block main %}
+<h1>Pipeline</h1>
+<p class="sub">
+  Score orders the digest; it never advances state. Every row here moved because I said so.
+</p>
+
+<div class="funnel">
+  {% for s in PIPELINE_ORDER %}
+    {% set n = counts.get(s, 0) %}
+    <a class="step {% if filter_state == s %}on{% endif %} {% if not n %}zero{% endif %}"
+       href="/?state={{ s }}">
+      <div class="n">{{ n }}</div>
+      <div class="k">{{ s.replace('_', ' ') }}</div>
+    </a>
+  {% endfor %}
+</div>
+<div class="funnel">
+  {% for s in DEAD_ENDS %}
+    {% set n = counts.get(s, 0) %}
+    <a class="step {% if filter_state == s %}on{% endif %} {% if not n %}zero{% endif %}"
+       href="/?state={{ s }}">
+      <div class="n">{{ n }}</div>
+      <div class="k">{{ s }}</div>
+    </a>
+  {% endfor %}
+</div>
+
+<div class="grid" style="margin-top:16px">
+  <div class="panel">
+    <h3>Applied, last 30 days</h3>
+    <div class="bignum">{{ health.applied_30d }}</div>
+    <p class="hint">Target is ~100/month, each one individually reviewed.</p>
+  </div>
+  <div class="panel">
+    <h3>Would apply anyway</h3>
+    <div class="bignum {% if honesty.ratio is none %}{% elif honesty.ratio >= 0.5 %}good{% else %}bad{% endif %}">
+      {{ honesty.ratio|pct }}
+    </div>
+    <p class="hint">
+      {{ honesty.yes }}/{{ honesty.answered }} answered.
+      {% if honesty.unanswered %}
+        <span class="flag">{{ honesty.unanswered }} applied without an answer.</span>
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+{% if health.backlog %}
+  <div class="panel">
+    <h3>Queue</h3>
+    {{ health.backlog }} waiting to be submitted, oldest touched
+    <span class="mono">{{ health.oldest }}</span>.
+    <p class="hint">
+      If this grows because I am not actually applying, cut the monthly target — do not
+      approve jobs I will not submit.
+    </p>
+  </div>
+{% endif %}
+
+<h2>
+  {% if filter_state %}{{ filter_state.replace('_', ' ') }}{% else %}All applications{% endif %}
+  {% if filter_state %}<a class="dim" href="/">— clear filter</a>{% endif %}
+</h2>
+
+{% if applications %}
+<table>
+  <thead>
+    <tr>
+      <th>Company</th>
+      <th>Role</th>
+      <th>State</th>
+      <th>ATS</th>
+      <th>Source</th>
+      <th>Applied</th>
+      <th>Ref</th>
+      <th class="num">WAA</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in applications %}
+    <tr>
+      <td><a href="/applications/{{ a.id }}">{{ a.company_name }}</a></td>
+      <td>
+        {{ a.title }}
+        {% if a.location %}<div class="dim">{{ a.location }}{% if a.remote and a.remote != 'unknown' %} · {{ a.remote }}{% endif %}</div>{% endif %}
+      </td>
+      <td><span class="pill {{ a.state }}">{{ a.state.replace('_', ' ') }}</span></td>
+      <td class="dim">{{ a.ats_type or '—' }}</td>
+      <td class="dim">{{ a.source }}</td>
+      <td class="mono dim">{{ (a.applied_at or '')[:10] or '—' }}</td>
+      <td>{% if a.referral_name %}<span class="good">{{ a.referral_name }}</span>{% else %}<span class="dim">—</span>{% endif %}</td>
+      <td class="num">
+        {% if a.would_apply_anyway == 1 %}yes
+        {% elif a.would_apply_anyway == 0 %}<span class="flag">no</span>
+        {% else %}<span class="dim">—</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <p class="empty">
+    Nothing here yet. <a href="/applications/new">Log an application</a> to backfill the
+    ones already submitted by hand.
+  </p>
+{% endif %}
+{% endblock %}

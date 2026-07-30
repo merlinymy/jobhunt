@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Stats — jobhunt{% endblock %}
+
+{% macro conversion(rows, header) %}
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ header }}</th>
+        <th class="num">Tracked</th>
+        <th class="num">Applied</th>
+        <th class="num">Responses</th>
+        <th class="num">Interviews</th>
+        <th class="num">Offers</th>
+        <th class="num">Ghosted</th>
+        <th class="num">Response rate</th>
+        <th class="num">Interview rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.label }}</td>
+        <td class="num dim">{{ r.tracked }}</td>
+        <td class="num">{{ r.applied }}</td>
+        <td class="num">{{ r.responses }}</td>
+        <td class="num">{{ r.interviews }}</td>
+        <td class="num">{{ r.offers }}</td>
+        <td class="num dim">{{ r.ghosted }}</td>
+        <td class="num">{{ r.response_rate|pct }}</td>
+        <td class="num">{{ r.interview_rate|pct }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No applications logged yet.</p>
+  {% endif %}
+{% endmacro %}
+
+{% block main %}
+<h1>Stats</h1>
+<p class="sub">
+  Conversion of submissions, not of current state — <em>applied</em> counts every
+  application that ever reached <span class="mono">applied</span>.
+</p>
+
+<div class="grid">
+  <div class="panel">
+    <h3>Would apply anyway</h3>
+    <div class="bignum {% if honesty.ratio is none %}{% elif honesty.ratio >= 0.5 %}good{% elif honesty.ratio >= 0.35 %}warn{% else %}bad{% endif %}">
+      {{ honesty.ratio|pct }}
+    </div>
+    <p class="hint">
+      {{ honesty.yes }} of {{ honesty.answered }} answered.
+      {% if honesty.unanswered %}<span class="flag">{{ honesty.unanswered }} unanswered.</span>{% endif %}
+      Below 50% the prefilter needs tuning — not the LLM.
+    </p>
+  </div>
+  <div class="panel">
+    <h3>Applied, last 30 days</h3>
+    <div class="bignum">{{ health.applied_30d }}</div>
+    <p class="hint">
+      {{ health.backlog }} in the submit queue.
+      {% if health.backlog > 20 %}
+        <span class="flag">Queue rot — cut the monthly target to 60–70 rather than
+        approving jobs I will not submit.</span>
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<h2>Conversion by ATS</h2>
+{{ conversion(by_ats, 'ATS') }}
+<p class="hint">Derived by regex on the apply URL at read time, never stored.</p>
+
+<h2>Conversion by source</h2>
+{{ conversion(by_source, 'Source') }}
+
+<h2>Conversion by referral status</h2>
+{{ conversion(by_referral, 'Referral') }}
+
+<h2>Current state</h2>
+<table>
+  <thead><tr><th>State</th><th class="num">Applications</th></tr></thead>
+  <tbody>
+    {% for s in PIPELINE_ORDER %}
+      <tr><td><span class="pill {{ s }}">{{ s.replace('_', ' ') }}</span></td>
+          <td class="num">{{ counts.get(s, 0) }}</td></tr>
+    {% endfor %}
+    {% for s in DEAD_ENDS %}
+      <tr><td><span class="pill {{ s }}">{{ s }}</span></td>
+          <td class="num">{{ counts.get(s, 0) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
