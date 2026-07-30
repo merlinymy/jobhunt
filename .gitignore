@@ -1,0 +1,26 @@
+# secrets
+.env
+credentials.json
+token.json
+
+# database — holds every submitted PDF; back up off-box, never commit
+*.db
+*.db-wal
+*.db-shm
+
+# personal instructions and local settings
+CLAUDE.local.md
+.claude/settings.local.json
+
+# rendered output
+out/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
