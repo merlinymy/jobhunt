@@ -4,6 +4,17 @@ Personal job-search pipeline. Discovers jobs, scores them against my profile, ge
 tailored resume and answer set per job, tracks outcomes. **I fill out and submit every
 application by hand.** Single user, localhost only, runs on a Mac mini M4.
 
+**Objective: maximize interviews per application I hand-submit.** The binding constraint is my
+~10 minutes per form, not the supply of postings — so the job is to make each submission count,
+not to raise the count. Filters exist to drop roles I would genuinely refuse, never to discard
+shots on unreliable or missing data. `would_apply_anyway` is the check that this hasn't quietly
+become volume; read it as the primary metric, not a footnote.
+
+**What I select on, in order: title, level, then location.** Title and level are the only hard
+filters. Location *ranks* the digest and never rejects — the preference list ends in a
+catch-all. Comp neither filters nor ranks; it exists to answer with. When adding a rule, decide
+first whether it rejects or merely orders, and default to ordering.
+
 <!-- Detail deliberately kept out of this file to stay under the 200-line context budget.
      Read the docs below on demand; do not @import them. -->
 
@@ -105,7 +116,8 @@ the app.** It holds the DB, the launchd jobs, and the dashboard. The laptops are
 - **One writer host.** Laptops read and write through the mini's HTTP API over Tailscale,
   never by opening the DB file over a share. For local dev, use a throwaway seeded DB.
 - Profile data syncs between machines through git (`docs/profile/`), not through the DB.
-  Keep this repo **private** — those files hold my address, salary expectations, and EEO answers.
+  Keep this repo **private** — those files hold my legal name, email, phone, city, pay expectations,
+  full work history, and a contact network with other people's names in it.
 - On the mini: launchd, not cron or systemd. Scheduled jobs need a logged-in GUI session.
 - Default Mac sleep silently kills the 8am digest: `sudo pmset -a sleep 0 disablesleep 1`.
 - Telegram uses long polling. No webhook, no port forwarding, no tunnel, no static IP.

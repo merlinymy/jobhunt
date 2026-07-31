@@ -85,13 +85,51 @@ apply.workable.com/{slug}         {tenant}.myworkdayjobs.com
 
 Two passes.
 
-**Pass 1, deterministic — must kill roughly 90%.** Title allowlist and blocklist, seniority
-band, location and remote rules, comp floor, company blocklist, hard exclusions (clearance
+**Pass 1, deterministic — rejects on title and level, and little else.** Title keyword match
+plus blocklist, seniority band, company blocklist, tech dealbreakers, hard exclusions (clearance
 required, unpaid, commission-only, staffing agencies).
+
+Titles are matched by keyword (`title_keywords`, any substring, case-insensitive) rather than by
+an exact-string allowlist. Real titles vary far too much — an allowlist would have to enumerate
+"Software Development Engineer II", "Senior Full Stack Developer", and dozens more, and it fails
+*silently* when it misses one. Keywords trade precision for recall on purpose: noise like "Sales
+Engineer" reaches Pass 2 and gets scored down, which is the cheap direction to be wrong in.
+
+Keywords are not a complete solution either — a title sharing no word with the list still
+drops, "Member of Technical Staff" being the obvious case. That's a known gap, closed by adding
+a keyword when a real posting reveals it, not by pretending the matcher is exhaustive.
+
+Discipline (frontend / backend / full-stack) is deliberately not filtered: that's fit, which
+Pass 2 scores and I judge in the digest.
+
+**The old "must kill roughly 90%" target is void.** It was written when comp and location were
+both filters. Neither is now — title and level are what I actually reject on, so Pass 1 kills
+far less and more postings reach Pass 2. That is the intended trade: the objective is
+interviews per hand-submitted application, and discarding a posting on weak evidence costs a
+shot for nothing. Re-baseline the kill rate against real ingest volume rather than tuning
+toward a number this doc guessed.
+
+Consequence worth watching: more survivors means more Pass 2 calls. Haiku, batched, with the
+profile corpus cached keeps that cheap, but `llm_calls` is where to confirm it rather than
+assume it.
+
+**Comp is deliberately not a filter.** Most postings state no range at all, and disclosure
+tracks state pay-transparency law rather than job quality — so a comp floor under-samples
+non-mandating states for reasons unrelated to the roles. `facts.yaml` `comp:` holds one
+pre-decided number, `walk_away`, which tells me when to leave a conversation and never rejects
+a posting. The figure I actually give an employer is decided at packet time and stored per
+company (see Answer resolution). Where a posting does state a range, the digest surfaces it and
+I skip it myself in one tap.
 
 **Pass 2, LLM.** Survivors get my profile summary plus the JD and return a 0–100 score with
 two sentences of reasoning. Runs through the Batch API — it isn't latency-sensitive, it just
 has to finish before the 8am digest. The profile summary is cached across all calls.
+
+**Location ranks, it does not filter.** `scoring.yaml` `location_rank` is an ordered list
+ending in a catch-all, so nothing is rejected for where it is. The digest sorts by location
+tier first, then by score within a tier. That order is deterministic on purpose: I stated the
+preference explicitly, so an LLM has no business re-deriving it. The LLM scores fit; the
+config decides which tier a posting sits in.
 
 Score never auto-advances state. It orders the digest, nothing more.
 
@@ -100,6 +138,13 @@ Score never auto-advances state. It orders the digest, nothing more.
 For each field: `answers` where `company_id = X` → fall back to `company_id IS NULL` → if tier
 is `narrative` and nothing is cached, generate and cache → if nothing at all, insert into
 `unknown_questions` and flag it on the packet.
+
+**Comp is a fact-tier answer scoped to a company.** There is no global default, because the
+number depends on the job's market. The first packet for a company prompts me for the figure —
+with market research alongside it, once that exists — and stores my answer at
+`company_id = X`. Every later application to that company reuses it verbatim, so I never quote
+two different numbers to one employer. It stays fact tier: I type it, the system never
+generates it.
 
 ### Applied detection
 
@@ -146,7 +191,8 @@ Constraints that follow:
 - **No DB in git and no DB in iCloud.** It holds BLOBs of every submitted PDF. Back it up
   off-box with a nightly copy, not by syncing the live file.
 - **Profile data syncs via git**, which is the reason `docs/profile/` is committed rather than
-  living only in the DB. Keep the repo private — those files contain my address, phone,
-  salary expectations, and EEO answers.
+  living only in the DB. Keep the repo private — those files contain my legal name, email,
+  phone, city, pay expectations, full work history, and a contact network with other people's
+  names in it. Street address and EEO answers are deliberately not collected.
 - **`CLAUDE.local.md` is per-machine** and gitignored, so each Mac carries its own paths. The
   8 GB laptop should not attempt to run anything heavier than the editor.

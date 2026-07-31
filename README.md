@@ -8,9 +8,10 @@ only, runs on a Mac mini.
 material, and instruments the outcome. It never touches a form and never auto-submits — see
 [Why no browser automation](docs/architecture.md#why-no-browser-automation).
 
-> **Keep this repository private.** `docs/profile/` holds my address, phone, salary
-> expectations, references, and EEO answers. It is committed on purpose — it's how profile data
-> syncs between machines — which is exactly why the repo cannot be public.
+> **Keep this repository private.** `docs/profile/` holds my legal name, email, phone, city,
+> pay expectations, full work history, and a contact network with other people's names in it. It is
+> committed on purpose — it's how profile data syncs between machines — which is exactly why the
+> repo cannot be public. Street address and EEO answers are deliberately *not* collected.
 
 ## Status
 

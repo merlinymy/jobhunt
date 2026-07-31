@@ -28,9 +28,11 @@ re-runnable, so fill them incrementally.
 ---
 
 ## A. Identity and decided-once answers
-*→ `docs/profile/facts.yaml`. Two jobs: feed the resume header, and store answers I'd
-otherwise improvise differently each time. Since I fill forms by hand, the test for a field
-is **would I have to decide or look this up?** If I'd type it from memory, it's not here.*
+*→ `docs/profile/facts.yaml`. Three blocks: `identity` feeds the resume header, `decided_once`
+stores answers I'd otherwise improvise differently each time, and `comp` holds my walk-away
+number plus what research needs to price the role.
+Since I fill forms by hand, the test for a field is **would I have to decide or look this
+up?** If I'd type it from memory, it's not here.*
 
 1. Legal name exactly as on your ID and tax documents. Preferred name if different.
 2. Email and phone you want on applications. City and state. *(Resume header.)*
@@ -38,14 +40,18 @@ is **would I have to decide or look this up?** If I'd type it from memory, it's 
 4. Are you legally authorized to work in the US? *(Exact yes/no. Knockout question.)*
 5. Will you now or in the future require sponsorship? *(Also knockout. Answer precisely.)*
    If on a visa: type, expiry, timeline pressure.
-6. **Salary:** target, floor, and the exact sentence you use when a form demands one figure.
-   You'll type a number ~100 times; decide it once.
+6. **Comp:** → the `comp:` block. Only one number is decided in advance — `walk_away`, below
+   which you don't take the job anywhere. That's a fact about your life, not the market, so
+   it's answerable now. Everything city-specific is decided per application, because pay moves
+   with market, arrangement, and level and you can't price a city you haven't seen a job in.
+   Also here: the *phrasing* you use when a form demands one figure, and which titles and level
+   research should price. Comp never filters a posting.
 7. Earliest start date and notice period.
 8. Onsite tolerance — remote only, hybrid (how many days), or onsite acceptable?
 9. Relocation — open to it? Which metros? Would you need assistance?
 10. Security clearance, if you hold one or expect to be asked.
-11. **References:** name, title, company, email, phone, relationship — and have they agreed?
-    *(Rarely requested, always annoying to hunt down mid-application.)*
+*(References are not here — they're people, so they live in `contacts.csv` with the rest of the
+network. See section G.)*
 
 **Deliberately not collected:** street address, EEO responses, travel percentage, "how did you
 hear about us," license numbers, driver's license. Your password manager's identity autofill
@@ -57,12 +63,16 @@ your application — there's nothing to keep consistent.
 *→ scoring config for `score.py` pass 1. This is deterministic filtering, so be strict — the
 prefilter should kill ~90% of ingested jobs.*
 
-19. Exact job titles you'd accept. List every real-world variant, not a category.
+19. Title **keywords** — a few words that appear in titles you'd accept (`engineer`,
+    `developer`). Substring match, so keep it short and wide. Don't enumerate exact titles:
+    real ones vary too much and a missed variant is a lost shot, silently.
 20. Title **blocklist** — words that mean automatic no (e.g. "Intern," "Staffing," "Manager"
-    if you're IC-track, "Contract" if you want FTE).
+    if you're IC-track, "Contract" if you want FTE). This is the list that should be precise.
 21. Your seniority band, and how much over/under-leveling you'll tolerate.
-22. Comp floor: the number below which you don't apply, regardless of fit.
-23. Location rules: acceptable metros, remote-only?, timezone constraints for remote.
+22. *(No comp question here. Comp never filters — see `facts.yaml` `comp:` for my walk-away
+    number, which exists to answer with, not to reject postings.)*
+23. Location **preference order**, best first, ending in a catch-all — it ranks the digest
+    rather than rejecting anything. Plus timezone constraints, which only apply to remote roles.
 24. Company size and stage preference. Any hard limits (no pre-seed, no 10,000+)?
 25. Industries you want. Industries you'd refuse.
 26. **Company blocklist** — competitors, past employers, anywhere you won't work.
@@ -160,30 +170,21 @@ prompt. This is the single highest-leverage section here.*
 70. **Do not contact:** anyone the system should never surface.
 71. Export your LinkedIn connections to CSV once (Settings → Data Privacy → Get a copy of your
     data), and import company + name. No platform automation, just the file.
-
----
-
-## H. Gaps and liabilities
-*→ `answers`, tier fact. Write the one-line explanation now, calmly, once — not under pressure
-in a form field at 11pm.*
-
-72. Employment gaps: dates and your one-line explanation for each.
-73. Short stints under a year: your explanation.
-74. Any career pivot that needs a bridge narrative.
-75. Anything a background or reference check would surface that you'd want to frame yourself.
-76. Any title inflation or deflation on past roles you should be consistent about.
+72. **References live here too**, as contacts with `relationship: reference`. Put their email in
+    `handle` with `channel: email`. Note that whether they've *agreed* has no structured column
+    yet — record it in `notes` until a real form demands more.
 
 ---
 
 ## Running this
 
-- **A, B, and H first.** They're short and they unblock scoring plus most form fields.
+- **A and B first.** They're short and they unblock scoring plus most form fields.
 - **C is the real work.** One role per sitting. Have your old resumes, performance reviews,
   and commit history open — you have forgotten most of your own metrics.
 - **E and F reward being written out longhand**, then compressed by the system. Don't
   pre-summarize; you'll strip out the specifics that make the output non-generic.
-- **Decide once, then freeze:** salary phrasing, sponsorship answer, gap
-  explanations. Inconsistency across applications to the same company is a real cost.
+- **Decide once, then freeze:** comp phrasing and the sponsorship answer. Inconsistency across
+  applications to the same company is a real cost.
 - **Expect this list to be incomplete.** Phase 0 — applying to 3–4 jobs by hand and logging
   the questions that surprised you — is what turns this into the actual taxonomy. Anything a real form
   asks that isn't here goes into `unknown_questions` and gets added.
