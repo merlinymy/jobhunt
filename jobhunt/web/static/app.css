@@ -134,7 +134,11 @@ p.sub { color: var(--dim); margin: 0 0 24px; }
 }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+.grid.three { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 980px) { .grid.three { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 760px) {
+  .grid, .grid.three { grid-template-columns: 1fr; }
+}
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th {

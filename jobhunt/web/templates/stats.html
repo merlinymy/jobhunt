@@ -8,7 +8,18 @@
   application that ever reached <span class="mono">applied</span>.
 </p>
 
-<div class="grid">
+<div class="grid three">
+  <div class="panel">
+    <h3>Interview rate</h3>
+    <div class="bignum {% if overall.interview_rate is none %}{% elif overall.interview_rate >= 0.1 %}good{% else %}warn{% endif %}">
+      {{ overall.interview_rate|pct }}
+    </div>
+    <p class="hint">
+      {{ overall.interviews }} of {{ overall.applied }} submitted reached an interview.
+      The objective is interviews per application I hand-submit, so this is the number
+      that matters.
+    </p>
+  </div>
   <div class="panel">
     <h3>Would apply anyway</h3>
     <div class="bignum {% if honesty.ratio is none %}{% elif honesty.ratio >= 0.5 %}good{% elif honesty.ratio >= 0.35 %}warn{% else %}bad{% endif %}">

@@ -418,6 +418,8 @@ def conversion_by(conn: sqlite3.Connection, dimension: str) -> list[dict[str, An
             key = row["source"] or "unknown"
         elif dimension == "referral":
             key = "referred" if row["referral_contact_id"] else "cold"
+        elif dimension == "all":
+            key = "all"
         else:
             raise ValueError(f"unknown dimension {dimension!r}")
 
@@ -493,6 +495,13 @@ def state_rows(
     )
     rows.sort(key=key, reverse=direction == "desc")
     return rows
+
+
+def overall(conn: sqlite3.Connection) -> dict[str, Any]:
+    """The whole funnel, ungrouped. Interview rate here is the headline metric —
+    the objective is interviews per hand-submitted application."""
+    buckets = conversion_by(conn, "all")
+    return buckets[0] if buckets else _finish(_blank_bucket("all"))
 
 
 def honesty(conn: sqlite3.Connection) -> dict[str, Any]:

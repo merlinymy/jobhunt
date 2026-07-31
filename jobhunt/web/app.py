@@ -485,6 +485,7 @@ def stats(request: Request, conn: Conn) -> Response:
         "stats.html",
         {
             "page": "stats",
+            "overall": queries.overall(conn),
             "honesty": queries.honesty(conn),
             "health": queries.queue_health(conn),
             **view,
