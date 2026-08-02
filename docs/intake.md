@@ -25,6 +25,11 @@ are the data.
 Those files are the source of truth. `make load-profile` imports them into SQLite and is
 re-runnable, so fill them incrementally.
 
+Sections C and D were answered a second way: the repos were read directly, and the gaps that
+reading them left became questions. Those questions and my answers are in
+`docs/profile/intake-answers.md` — the reasoning behind `experience.yaml`, including the
+answers that deliberately did not become bullets.
+
 ---
 
 ## A. Identity and decided-once answers
