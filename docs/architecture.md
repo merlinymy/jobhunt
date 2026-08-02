@@ -11,6 +11,7 @@ state each branch hangs off, and got two of them wrong.
 | From | To | Trigger |
 | --- | --- | --- |
 | — | `discovered` | `ingest` finds a new job and it survives dedup |
+| — | `applied` | manual entry of an application I already submitted by hand. It never passed through discovery, so it seeds one honest event rather than a fabricated history |
 | `discovered` | `filtered` | deterministic prefilter rejects it — **terminal** |
 | `discovered` | `scored` | prefilter passes, LLM assigns score + reasoning |
 | `scored` | `skipped` | I decline it in the digest — **terminal** |

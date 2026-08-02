@@ -47,6 +47,21 @@ def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def date_to_utc(value: str) -> str:
+    """Turn a `YYYY-MM-DD` form field into a timestamp, or raise.
+
+    Without this, a junk date string was being interpolated straight into the
+    column — `applied_at = 'garbageT12:00:00Z'` — which is unparseable, silently
+    corrupts every date-ordered query, and violates the ISO 8601 rule. Midday is
+    used because a date field carries no time and midnight straddles timezones.
+    """
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"expected a date as YYYY-MM-DD, got {value!r}") from exc
+    return parsed.strftime("%Y-%m-%dT12:00:00Z")
+
+
 def days_ago(days: int) -> str:
     """Cutoff timestamp for rolling windows, so no query inlines datetime('now')."""
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(

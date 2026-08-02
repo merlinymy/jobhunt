@@ -67,6 +67,10 @@ def find_job_by_url(conn: sqlite3.Connection, apply_url: str) -> sqlite3.Row | N
     ).fetchone()
 
 
+# UNWIRED. This is the soft dedup from docs/architecture.md — same company, same
+# normalized title, same location — for one posting listed under two aggregator URLs.
+# The entry form currently catches only the hard `apply_url_norm` collision, so that
+# case double-tracks. Wire this into the entry form and into `ingest` (Phase 4).
 def find_similar_jobs(
     conn: sqlite3.Connection, company_id: int, title: str, location: str | None
 ) -> list[sqlite3.Row]:
@@ -140,31 +144,6 @@ SELECT a.*,
   JOIN companies c ON c.id = j.company_id
   LEFT JOIN contacts ct ON ct.id = a.referral_contact_id
 """
-
-
-def list_applications(
-    conn: sqlite3.Connection,
-    *,
-    state: str | None = None,
-    active_only: bool = False,
-    limit: int = 200,
-) -> list[dict[str, Any]]:
-    where: list[str] = []
-    params: list[Any] = []
-    if state:
-        where.append("a.state = ?")
-        params.append(state)
-    if active_only:
-        placeholders = ", ".join("?" * len(states.TERMINAL))
-        where.append(f"a.state NOT IN ({placeholders})")
-        params.extend(sorted(states.TERMINAL))
-
-    sql = _APPLICATION_SELECT
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY COALESCE(a.applied_at, a.updated_at) DESC, a.id DESC LIMIT ?"
-    params.append(limit)
-    return [_decorate(row) for row in conn.execute(sql, params)]
 
 
 def get_application(conn: sqlite3.Connection, application_id: int) -> dict[str, Any] | None:
@@ -401,10 +380,22 @@ def conversion_by(conn: sqlite3.Connection, dimension: str) -> list[dict[str, An
     `applied` counts every application that reached `applied`, including ones
     that have since moved on — conversion of submissions, not of current state.
     """
+    # `interviews` and `offers` are derived from `events`, not from current state.
+    # An application that interviewed and was then rejected sits in state `rejected`
+    # (docs/architecture.md documents interview -> rejected), so counting current
+    # state silently drops it — and drops MORE of them the longer the pipeline runs,
+    # because interviews keep resolving. Since interviews-per-submission is the stated
+    # objective, that number has to come from history. `events` is that history.
     rows = conn.execute(
         """
         SELECT a.id, a.state, a.applied_at, a.first_response_at, a.referral_contact_id,
-               j.apply_url, j.source
+               j.apply_url, j.source,
+               EXISTS (SELECT 1 FROM events e
+                        WHERE e.application_id = a.id AND e.to_state = 'interview')
+                 AS ever_interviewed,
+               EXISTS (SELECT 1 FROM events e
+                        WHERE e.application_id = a.id AND e.to_state = 'offer')
+                 AS ever_offered
           FROM applications a
           JOIN jobs j ON j.id = a.job_id
         """
@@ -429,9 +420,9 @@ def conversion_by(conn: sqlite3.Connection, dimension: str) -> list[dict[str, An
             bucket["applied"] += 1
         if row["first_response_at"]:
             bucket["responses"] += 1
-        if row["state"] in (states.INTERVIEW, states.OFFER):
+        if row["ever_interviewed"]:
             bucket["interviews"] += 1
-        if row["state"] == states.OFFER:
+        if row["ever_offered"]:
             bucket["offers"] += 1
         if row["state"] == states.REJECTED:
             bucket["rejections"] += 1

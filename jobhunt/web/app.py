@@ -256,7 +256,11 @@ def create_application(
         return fail("Company, title, and apply URL are all required.")
 
     ats_type, ats_slug = detect_ats(apply_url)
-    applied_ts = f"{applied_at}T12:00:00Z" if applied_at else config.utcnow()
+    try:
+        # Validated, not interpolated — an unparseable date used to reach the column.
+        applied_ts = config.date_to_utc(applied_at) if applied_at else config.utcnow()
+    except ValueError as exc:
+        return fail(str(exc))
 
     try:
         with db.transaction(conn):  # company + job + application + event, or nothing
@@ -289,14 +293,18 @@ def create_application(
             )
             if note.strip():
                 states.log_event(conn, application_id, "note", detail=note.strip())
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as exc:
         existing = queries.find_job_by_url(conn, apply_url)
         if existing:
             return fail(
                 f"Already tracked — {existing['title']} (job {existing['id']}). "
                 "Update that application instead of logging a second one."
             )
-        raise
+        # A referral pointing at a contact that doesn't exist trips the foreign key.
+        # Report it rather than letting the 500 surface.
+        if "FOREIGN KEY" in str(exc).upper():
+            return fail("That referral contact no longer exists. Pick another, or none.")
+        return fail(f"The database rejected that: {exc}")
     except ValueError as exc:
         return fail(str(exc))
 
@@ -344,6 +352,8 @@ def post_transition(
         )
     except states.InvalidTransition as exc:
         raise HTTPException(422, str(exc)) from exc
+    except LookupError as exc:  # no such application — 404, not a crash
+        raise HTTPException(404, str(exc)) from exc
     return _state_panel(request, conn, application_id)
 
 
@@ -363,7 +373,10 @@ def post_honesty(
     application_id: int,
     would_apply_anyway: Annotated[int, Form()],
 ) -> Response:
-    queries.set_would_apply_anyway(conn, application_id, int(would_apply_anyway))
+    try:
+        queries.set_would_apply_anyway(conn, application_id, int(would_apply_anyway))
+    except ValueError as exc:  # the guard in queries raises on anything but 0/1
+        raise HTTPException(422, str(exc)) from exc
     return _state_panel(request, conn, application_id)
 
 

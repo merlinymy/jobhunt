@@ -29,17 +29,31 @@ question wording for its seed data. Phase 5 benefits from real rejection emails 
 - [x] Manual application entry form
 - [x] Stats page: conversion by ATS, by source, by referral status, `would_apply_anyway` ratio
 - [ ] Backfill the 10 Phase 0 applications
+      Nothing blocks this — it is data entry. One fidelity caveat: `applied_at` backdates
+      correctly, but `states.create` stamps the seed event with *now*, and the
+      known-outcome walk sets `first_response_at` to the backfill moment. So
+      response-latency analysis over backfilled rows will be meaningless.
+      `transition()` already accepts `occurred_at`; the route just never passes it and
+      the form has no response-date field. Add that first if latency matters, since
+      redoing it later means deleting rows.
 
 **Gate:** I can log an application by hand and see conversion stats.
 
 ## Phase 2 — profile store and resume tailoring
 
 - [x] `docs/profile/experience.yaml` filled (intake sections C, D)
-- [ ] `002_*.sql`: the corpus carries fields `001_init.sql` has no column for —
-      `experiences.titles_history` / `known_for` / `recognition` / `tech.*`,
-      `projects.role` / `traction` / `scope` / `start_month` / `end_month`, and `languages`
-      (no table at all). The YAML leads the schema deliberately; the loader needs these
-      before it can round-trip the file without dropping data.
+- [ ] `002_*.sql`, two unrelated needs in one migration:
+      1. Columns the corpus carries and `001_init.sql` lacks —
+         `experiences.titles_history` / `known_for` / `recognition` / `tech.*`,
+         `projects.role` / `traction` / `scope` / `start_month` / `end_month`, and
+         `languages` (no table at all). The YAML leads the schema deliberately; the
+         loader needs these before it can round-trip the file without dropping data.
+      2. **`answers` global-default uniqueness.** `.claude/rules/data-layer.md` requires
+         `(question_key, company_id)` UNIQUE, but SQLite treats NULLs as distinct, and
+         `company_id IS NULL` is how the global default is encoded — so two global
+         answers to the same question both insert today. Verified. Needs a partial
+         index: `CREATE UNIQUE INDEX ... ON answers(question_key) WHERE company_id IS NULL`.
+         Unreachable in Phase 1 (nothing writes `answers`), load-bearing in Phase 3.
 - [ ] `make load-profile` imports it; re-running is idempotent
 - [ ] RenderCV pipeline: master data → PDF
 - [ ] Tailor prompt receives bullet rows with IDs, returns selected IDs plus reworded text

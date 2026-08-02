@@ -2,7 +2,16 @@
    route. Unrecognized values fall back to following the OS. #}
 {% set cookie_theme = request.cookies.get('theme') %}
 {% set theme = cookie_theme if cookie_theme in ('light', 'dark') else 'system' %}
-{% set here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
+{# `next` has to be a GET-able URL. On a validation error the entry form re-renders
+   under POST /applications, which has no GET route — using the request path there
+   would 405 the theme switch. Fall back to the page's own GET address. #}
+{% if request.method == 'GET' %}
+  {% set here = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
+{% elif page == 'new' %}
+  {% set here = '/applications/new' %}
+{% else %}
+  {% set here = '/' %}
+{% endif %}
 <!doctype html>
 <html lang="en"{% if theme != 'system' %} data-theme="{{ theme }}"{% endif %}>
 <head>
