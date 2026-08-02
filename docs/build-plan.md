@@ -34,7 +34,12 @@ question wording for its seed data. Phase 5 benefits from real rejection emails 
 
 ## Phase 2 — profile store and resume tailoring
 
-- [ ] `docs/profile/experience.yaml` filled (intake sections C, D)
+- [x] `docs/profile/experience.yaml` filled (intake sections C, D)
+- [ ] `002_*.sql`: the corpus carries fields `001_init.sql` has no column for —
+      `experiences.titles_history` / `known_for` / `recognition` / `tech.*`,
+      `projects.role` / `traction` / `scope` / `start_month` / `end_month`, and `languages`
+      (no table at all). The YAML leads the schema deliberately; the loader needs these
+      before it can round-trip the file without dropping data.
 - [ ] `make load-profile` imports it; re-running is idempotent
 - [ ] RenderCV pipeline: master data → PDF
 - [ ] Tailor prompt receives bullet rows with IDs, returns selected IDs plus reworded text
