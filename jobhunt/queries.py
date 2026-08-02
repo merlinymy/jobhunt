@@ -101,7 +101,13 @@ def insert_job(
     comp_max: int | None = None,
     posted_at: str | None = None,
 ) -> int:
-    """Insert a job. `apply_url_norm` is UNIQUE — a duplicate raises IntegrityError."""
+    """Insert a job. `apply_url_norm` is UNIQUE — a duplicate raises IntegrityError.
+
+    `posted_at` is validated here rather than in the route: Phase 4 ingest writes
+    this column through this function without passing through the web layer, so a
+    check up there would guard the path that matters least.
+    """
+    posted_at = config.to_utc_timestamp(posted_at) if posted_at else None
     with transaction(conn):
         cursor = conn.execute(
             """
@@ -539,3 +545,94 @@ def queue_health(conn: sqlite3.Connection) -> dict[str, Any]:
         "oldest": row["oldest"],
         "applied_30d": applied_30d,
     }
+
+
+# =================================== corpus ===================================
+# Read-only views of the profile corpus. `docs/profile/` is the source of truth
+# and these rows are derived from it by `make load-profile`; nothing here writes.
+
+
+def profile_facts(conn: sqlite3.Connection) -> dict[str, str]:
+    """`profile_facts` as a plain mapping. Keys keep their YAML path."""
+    return {
+        row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM profile_facts")
+    }
+
+
+def corpus_experiences(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM experiences ORDER BY sort_order, id"
+    ).fetchall()
+
+
+def corpus_projects(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM projects ORDER BY sort_order, id").fetchall()
+
+
+def corpus_education(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM education ORDER BY COALESCE(end_month, '9999-99') DESC, id"
+    ).fetchall()
+
+
+def corpus_credentials(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM credentials ORDER BY kind, COALESCE(issued, '') DESC, id"
+    ).fetchall()
+
+
+def corpus_languages(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM languages ORDER BY id").fetchall()
+
+
+def corpus_bullets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every bullet, with its parent. The tailor selects from exactly this set."""
+    return conn.execute(
+        "SELECT * FROM bullets ORDER BY experience_id, project_id, sort_order, id"
+    ).fetchall()
+
+
+def llm_spend(conn: sqlite3.Connection, days: int = 30) -> dict[str, Any]:
+    """Cost and cache behaviour over a rolling window.
+
+    The cache hit rate is the point. CLAUDE.md ranks prompt caching as the first
+    cost lever, ahead of the Batch API and model tier, and a write bills at 125%
+    against a read's 10% — so a task whose calls never land inside the 5-minute
+    TTL is paying a premium for an entry it never reads. That looks like a high
+    write count with a hit rate near zero, and it is not visible from cost alone.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*)                        AS calls,
+               COALESCE(SUM(cost_usd), 0)      AS cost,
+               COALESCE(SUM(cache_read_tokens), 0)  AS read_tokens,
+               COALESCE(SUM(cache_write_tokens), 0) AS write_tokens,
+               SUM(error IS NOT NULL)          AS failed,
+               SUM(stop_reason = 'max_tokens') AS truncated
+          FROM llm_calls
+         WHERE called_at >= ?
+        """,
+        (config.days_ago(days),),
+    ).fetchone()
+
+    cached = (row["read_tokens"] or 0) + (row["write_tokens"] or 0)
+    return {
+        "days": days,
+        "calls": row["calls"],
+        "cost": row["cost"],
+        "failed": row["failed"] or 0,
+        "truncated": row["truncated"] or 0,
+        # Share of cacheable tokens that were served from cache rather than
+        # written. None, not 0, when nothing cacheable was sent — an unused
+        # cache and an absent one are different situations.
+        "hit_rate": (row["read_tokens"] / cached) if cached else None,
+    }
+
+
+def bullets_by_id(conn: sqlite3.Connection, ids: list[int]) -> dict[int, sqlite3.Row]:
+    """The source rows a tailored resume claims to be built from."""
+    if not ids:
+        return {}
+    marks = ", ".join("?" for _ in ids)
+    rows = conn.execute(f"SELECT * FROM bullets WHERE id IN ({marks})", tuple(ids)).fetchall()
+    return {int(row["id"]): row for row in rows}
