@@ -42,27 +42,74 @@ question wording for its seed data. Phase 5 benefits from real rejection emails 
 ## Phase 2 — profile store and resume tailoring
 
 - [x] `docs/profile/experience.yaml` filled (intake sections C, D)
-- [ ] `002_*.sql`, two unrelated needs in one migration:
-      1. Columns the corpus carries and `001_init.sql` lacks —
-         `experiences.titles_history` / `known_for` / `recognition` / `tech.*`,
-         `projects.role` / `traction` / `scope` / `start_month` / `end_month`, and
-         `languages` (no table at all). The YAML leads the schema deliberately; the
-         loader needs these before it can round-trip the file without dropping data.
-      2. **`answers` global-default uniqueness.** `.claude/rules/data-layer.md` requires
-         `(question_key, company_id)` UNIQUE, but SQLite treats NULLs as distinct, and
-         `company_id IS NULL` is how the global default is encoded — so two global
-         answers to the same question both insert today. Verified. Needs a partial
-         index: `CREATE UNIQUE INDEX ... ON answers(question_key) WHERE company_id IS NULL`.
-         Unreachable in Phase 1 (nothing writes `answers`), load-bearing in Phase 3.
-- [ ] `make load-profile` imports it; re-running is idempotent
-- [ ] RenderCV pipeline: master data → PDF
-- [ ] Tailor prompt receives bullet rows with IDs, returns selected IDs plus reworded text
-- [ ] Validator per `.claude/rules/tailoring.md`, raising on any unsourced claim
-- [ ] Diff view in the dashboard showing every change against master
-- [ ] Table-driven adversarial fixtures for the validator
+- [x] Migrations. Landed as four, not one — 002 was taken by the Phase 1 audit's
+      `would_apply_anyway` CHECK, and the natural-key and cache-accounting needs surfaced
+      after 003 was written. `003` adds the columns the corpus carries and `001_init.sql`
+      lacks plus the `answers` global-default partial index; `004` carries the same
+      NULL-distinctness fix up to `education` and `credentials`; `005` splits cache reads
+      from writes on `llm_calls` and gives `stop_reason` its own column.
+- [x] `make load-profile` imports it; re-running is idempotent
+      (verified: three consecutive runs, identical counts)
+- [x] RenderCV pipeline: master data → PDF — **renders, but the format is wrong. See below.**
+- [x] Tailor prompt receives bullet rows with IDs, returns selected IDs plus reworded text
+- [x] Validator per `.claude/rules/tailoring.md`, raising on any unsourced claim
+      — with four known holes, below
+- [x] Diff view in the dashboard showing every change against master
+- [x] Table-driven adversarial fixtures for the validator (48 cases, all passing)
 
 **Gate:** Paste a JD, get a tailored PDF plus a diff — and the validator has caught at least one
 deliberately fabricated claim in testing.
+
+**Gate status: mechanically met, deliberately not closed.** The path runs end to end and the
+fixtures catch every fabrication they name. Two things are open, and Phase 3 builds packets on
+top of both, so they are cheaper to fix now than after.
+
+### Open — resume format
+
+The generated PDF has layout problems, seen on a real tailored render. **My own list, to be
+replaced by the actual one:**
+
+- Only one of three projects carries a URL, so one renders as a link and two as plain text.
+- `FireProofSheep` has no `start_month` / `end_month`, so its entry lacks the date column the
+  others have. That is missing corpus data, not a renderer bug.
+- The `Technologies` line is one long comma-joined run. `_tech_union` flattens
+  built/owned/maintained/touched into a single undifferentiated list.
+- Section order is whatever `build_cv` inserts, not a chosen order:
+  experience → projects → education → skills → languages → posters.
+- Master resume is 7 pages. Fine as a diff baseline, unusable as a resume — worth confirming
+  that is the intent.
+- Unverified against `.claude/rules/tailoring.md`: whether dates actually render as
+  `Jan 2023 – Mar 2025`.
+
+### Open — validator holes found auditing this phase
+
+Each was reproduced against the real corpus. None is caught today.
+
+1. **A number glued to letters can be changed silently.** `_STANDALONE_NUMBER`'s
+   `(?<![A-Za-z0-9])` lookbehind stops `p99` reading as a bare `9`, but it makes the whole
+   token invisible rather than comparing it. Confirmed: `v1` → `v4` accepted on bullet 68.
+   Also exposed — `Y537S` (the ERα crystal structure), `BM25`, `base64`, `mulberry32`.
+   Fix: extract `[A-Za-z]+\d+[A-Za-z0-9]*` from the output and require each in
+   `haystack + noun_context[bid]`, the same allowance the proper-noun check uses.
+2. **Lowercase invented proper nouns pass.** `at stripe`, `using terraform` — accepted. The
+   tradeoff is deliberate (checking every lowercase word would flag ordinary prose), but it
+   means "invented employer", a required reject, only holds when capitalized.
+3. **A plain merge of two bullets under one id passes** unless it drags across a number, a
+   proper noun, or a scope word. The system prompt forbids merging outright.
+4. **Non-ASCII homoglyphs are invisible.** `_WORD` is `[A-Za-z]`-anchored, so `Ѕtripe` with a
+   Cyrillic Ѕ tokenizes as lowercase `tripe` and is skipped. The JD is untrusted text and it
+   goes into the prompt.
+
+1 and 4 are contained fixes. 2 and 3 are design calls.
+
+### Also noted
+
+- `verify_schema` passes on a DB that only ran `001`, so `/tailor` then fails with
+  `no such table: languages` instead of saying to migrate.
+- `llm_calls.prompt` stores only the varying part, not the cached corpus prefix, so a call
+  cannot be reconstructed from its row. CLAUDE.md says to log the prompt — decide which.
+- `peptideDesign` sits under `projects:`, not `experiences:`. An earlier decision was to move
+  it, which would give two work entries instead of one. Confirm which is current.
 
 ## Phase 3 — answer bank and chat intake
 
