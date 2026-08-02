@@ -1,23 +1,55 @@
 # Model routing. Change a value here, not a call site — llm.py reads this.
-# Rates as of 2026-07-30, $/million tokens in/out:
-#   claude-haiku-4-5-20251001   $1 / $5
-#   claude-sonnet-5             $2 / $10  (intro rate; goes to $3/$15 on 2026-09-01)
-#   claude-opus-5               $5 / $25
 # Measured cost at ~100 applications/month: all-opus ~$14, haiku-bulk mixed ~$8.
 
 provider: anthropic          # anthropic | ollama  (ollama unimplemented; see note below)
 
+# $/million tokens. The API does not return a price, so `llm_calls.cost_usd` is
+# reconstructed from these. They used to live in a dict in llm.py alongside a
+# comment here saying the same thing in prose, which is two copies to keep in
+# step and one of them unenforced — the sonnet line below was already dated to
+# expire while the code held the intro rate with no way to notice.
+#
+# A model routed above but missing here is refused before the call is made.
+# Logging $0.00 for it would be worse: the spend just disappears.
+rates:
+  claude-opus-5:
+    input: 5.0
+    output: 25.0
+  claude-sonnet-5:
+    input: 3.0
+    output: 15.0
+    # Introductory pricing. llm.py applies this only through `through`, then
+    # falls back to the standard rate above with no edit needed here.
+    intro: {input: 2.0, output: 10.0, through: "2026-08-31"}
+  claude-haiku-4-5-20251001:
+    input: 1.0
+    output: 5.0
+
+# Sizing max_tokens: on Opus 5 the budget covers reasoning *and* the reply, and
+# reasoning is on by default. A budget sized from the visible output alone will
+# truncate. Leaving reasoning off is not the fix — with it disabled the model
+# sometimes writes <thinking> tags into the response, which breaks any caller
+# parsing JSON out of it. Budget generously instead; you are billed for tokens
+# produced, not for the ceiling. llm.py raises on a truncated reply rather than
+# handing back half a JSON object.
+
 tasks:
   tailor:
     model: claude-opus-5     # quality-critical, ~100 calls/mo, drives callbacks
-    max_tokens: 2000
+    # 2000 truncated at the dashboard's own limit ceiling of 30 bullets, and a
+    # 10-bullet call already used 1562. 30 long bullets plus reasoning needs
+    # roughly 5k; 8000 leaves room for a corpus that keeps growing.
+    max_tokens: 8000
     cache_profile: true      # profile corpus is identical every call
   narrative:
     model: claude-opus-5     # "why this company"; cached per company after first call
-    max_tokens: 1000
+    max_tokens: 4000         # same reasoning-shares-the-budget rule as tailor
     cache_profile: true
   score:
     model: claude-haiku-4-5-20251001   # ~600 calls/mo, I review the ranking anyway
+    # Haiku 4.5 does not reason unless asked, so this budget is the reply only.
+    # Still tight for a score plus a sentence of reasoning — revisit when Phase 4
+    # lands and there is real output to measure.
     max_tokens: 200
     cache_profile: true
     batch: true              # not latency-sensitive; runs before the 8am digest
@@ -26,6 +58,20 @@ tasks:
     max_tokens: 100
     batch: false             # hourly, low volume, keep it simple
 
+# `cache_profile: true` means the corpus prefix is *cacheable*, not that every
+# call should write a cache entry. Whether that pays depends entirely on spacing:
+# a write bills at 125% of base input and a read at 10%, on a 5-minute TTL, so
+# the break-even is two calls inside the window. For the ~10k-token corpus:
+#
+#   isolated call, no caching     10445 tok x $5/M            = $0.052
+#   isolated call, cache written  x1.25, never read           = $0.065   <- a loss
+#   five in a burst, cached       1.25 + 4x0.1 of one call    = $0.070   vs $0.261
+#
+# So the caller declares it, not the config: llm.complete(..., expect_repeat=)
+# defaults to True for the batch workers and is False on the dashboard's
+# single-JD path, which would otherwise pay the premium on every one-off tailor
+# and never once read the entry back.
+#
 # Cost levers, in order of actual impact for this workload:
 #   1. Prompt caching — the profile corpus is byte-identical across all 700 calls/mo.
 #      Cache hits bill at 10% of base input. Bigger lever than model tier.
