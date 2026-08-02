@@ -30,8 +30,8 @@ score: $(PY)  ## prefilter + LLM scoring on `discovered`
 digest: $(PY)  ## send today's Telegram digest
 	$(PY) -m jobhunt.digest
 
-tailor: $(PY)  ## build packets for `job_approved`
-	$(PY) -m jobhunt.tailor
+tailor: $(PY)  ## tailor against one JD: make tailor JD=path/to/jd.txt  (packets: Phase 3)
+	$(PY) -m jobhunt.tailor $(JD)
 
 inbox: $(PY)  ## poll Gmail, classify, update states
 	$(PY) -m jobhunt.inbox
