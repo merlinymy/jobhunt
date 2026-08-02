@@ -27,6 +27,7 @@
       <a class="brand" href="/">jobhunt</a>
       <a href="/" {% if page == 'pipeline' %}class="on"{% endif %}>Pipeline</a>
       <a href="/applications/new" {% if page == 'new' %}class="on"{% endif %}>Log application</a>
+      <a href="/tailor" {% if page == 'tailor' %}class="on"{% endif %}>Tailor</a>
       <a href="/stats" {% if page == 'stats' %}class="on"{% endif %}>Stats</a>
 
       {# POST because it changes stored state; one form, three submit buttons, so
@@ -45,5 +46,30 @@
   <main>
     {% block main %}{% endblock %}
   </main>
+
+  {# HTMX does not swap on a 4xx or 5xx, so without this a rejected action is
+     indistinguishable from a dead button. One listener covers every hx-post on
+     every page; the routes already return a usable sentence as plain text. #}
+  <div id="htmx-error" role="alert" aria-live="assertive" hidden></div>
+  <script>
+    (function () {
+      var box = document.getElementById('htmx-error');
+      var timer;
+      function show(message) {
+        box.textContent = message;
+        box.hidden = false;
+        clearTimeout(timer);
+        timer = setTimeout(function () { box.hidden = true; }, 8000);
+      }
+      document.body.addEventListener('htmx:responseError', function (event) {
+        var xhr = event.detail.xhr;
+        show((xhr.responseText || '').trim() || ('Request failed (' + xhr.status + ').'));
+      });
+      document.body.addEventListener('htmx:sendError', function () {
+        show('Could not reach the server. Is it still running?');
+      });
+      box.addEventListener('click', function () { box.hidden = true; });
+    })();
+  </script>
 </body>
 </html>

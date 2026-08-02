@@ -44,6 +44,44 @@
   </div>
 </div>
 
+<div class="grid three">
+  <div class="panel">
+    <h3>Model spend, last {{ spend.days }} days</h3>
+    <div class="bignum">${{ '%.2f'|format(spend.cost) }}</div>
+    <p class="hint">
+      {{ spend.calls }} call{{ '' if spend.calls == 1 else 's' }}.
+      {% if spend.failed %}<span class="flag">{{ spend.failed }} failed.</span>{% endif %}
+      {% if spend.truncated %}
+        <span class="flag">{{ spend.truncated }} hit the token budget — raise
+        <span class="mono">max_tokens</span> in <span class="mono">models.yaml</span>.</span>
+      {% endif %}
+    </p>
+  </div>
+  <div class="panel">
+    <h3>Cache hit rate</h3>
+    <div class="bignum {% if spend.hit_rate is none %}{% elif spend.hit_rate >= 0.5 %}good{% elif spend.hit_rate > 0 %}warn{% else %}bad{% endif %}">
+      {{ spend.hit_rate|pct }}
+    </div>
+    <p class="hint">
+      Share of the cacheable prefix read back rather than written. A read bills
+      at 10% of input, a write at 125% — so near-zero here means the corpus is
+      being paid for at a premium and never reused. Expected while tailoring is
+      one JD at a time; should climb once Phase 3 works the queue in a batch.
+    </p>
+  </div>
+  <div class="panel">
+    <h3>Cost per application</h3>
+    <div class="bignum">
+      {% if health.applied_30d %}${{ '%.2f'|format(spend.cost / health.applied_30d) }}{% else %}—{% endif %}
+    </div>
+    <p class="hint">
+      Model spend over applications actually submitted in the window — the only
+      denominator that matters, since an unsent packet still cost tokens.
+      Budgeted at roughly $0.14 against ~100 a month.
+    </p>
+  </div>
+</div>
+
 <h2>Conversion by ATS</h2>
 {% with table = tables.ats %}{% include "_stats_conversion.html" %}{% endwith %}
 <p class="hint">

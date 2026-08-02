@@ -7,6 +7,7 @@ handles filling and tracking.
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,12 +15,19 @@ from typing import Annotated, Any
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import config, db, queries, states
-from ..normalize import detect_ats, normalize_apply_url
+from .. import config, db, llm, queries, resume, states, tailor
+from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 
 HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -38,6 +46,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="jobhunt", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+
+
+@app.exception_handler(HTTPException)
+def htmx_aware_http_exception(request: Request, exc: HTTPException) -> Response:
+    """Plain text for HTMX, FastAPI's JSON for everything else.
+
+    HTMX does not swap on a 4xx, so before this every rejected action — an
+    illegal transition, a stale id — did nothing at all on screen: the button
+    simply went dead. The banner in base.html shows this text; sending it as
+    JSON would put `{"detail": ...}` in front of me instead of the message.
+    """
+    if request.headers.get("HX-Request"):
+        return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
+    return JSONResponse(
+        {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
+    )
 
 
 def get_conn():
@@ -169,13 +193,38 @@ def new_application_form(request: Request, conn: Conn) -> Response:
     )
 
 
+# The outcomes the entry form can record, and the only legal successors of
+# `applied`. Anything else is a typed-in mistake, not a state.
+KNOWN_OUTCOMES = frozenset({states.REJECTED, states.INTERVIEW, states.OFFER})
+
+# Comp is stored as a plain SQLite integer. Above this, int() still succeeds and
+# the driver raises OverflowError at bind time, which was a 500 on the form.
+MAX_COMP = 100_000_000
+
+
+def _parse_comp(raw: str, field: str) -> int | None:
+    if not raw.strip():
+        return None
+    value = int(raw)  # ValueError here is caught and shown on the form
+    if not 0 <= value <= MAX_COMP:
+        raise ValueError(f"{field} should be between 0 and {MAX_COMP:,}, got {value:,}.")
+    return value
+
+
 @app.get("/applications/check-url", response_class=HTMLResponse)
 def check_url(request: Request, conn: Conn, apply_url: Annotated[str, Query()] = "") -> Response:
     """Live dedup check on the entry form. Guards on `jobs.apply_url_norm`."""
     apply_url = apply_url.strip()
     if not apply_url:
         return HTMLResponse("")
-    normalized = normalize_apply_url(apply_url)
+    try:
+        normalized = normalize_apply_url(apply_url)
+    except UnparseableURL as exc:
+        # Fires on `keyup`, so a URL is unparseable for most of the time it takes
+        # to type one. Say so in the panel instead of throwing a traceback per key.
+        return templates.TemplateResponse(
+            request, "_url_check.html", {"unparseable": str(exc)}, status_code=200
+        )
     ats_type, ats_slug = detect_ats(apply_url)
     existing = queries.find_job_by_url(conn, apply_url)
     application = None
@@ -255,12 +304,31 @@ def create_application(
     if not company.strip() or not title.strip() or not apply_url.strip():
         return fail("Company, title, and apply URL are all required.")
 
+    # Checked before anything is written. This used to run after the application
+    # was committed, so a value like "hired" raised InvalidTransition out of the
+    # route: a 500 for the user, a saved row in the DB, and "Already tracked" on
+    # the retry.
+    if outcome and outcome not in KNOWN_OUTCOMES:
+        return fail(
+            f"{outcome!r} is not an outcome I can record. "
+            f"Pick one of: {', '.join(sorted(KNOWN_OUTCOMES))}."
+        )
+
     ats_type, ats_slug = detect_ats(apply_url)
     try:
         # Validated, not interpolated — an unparseable date used to reach the column.
         applied_ts = config.date_to_utc(applied_at) if applied_at else config.utcnow()
+        comp_min_value = _parse_comp(comp_min, "Minimum comp")
+        comp_max_value = _parse_comp(comp_max, "Maximum comp")
     except ValueError as exc:
         return fail(str(exc))
+
+    if comp_min_value and comp_max_value and comp_min_value > comp_max_value:
+        # Comp neither filters nor ranks — it exists to answer with. An inverted
+        # range is a typo in a number I'd quote on a form, so catch it here.
+        return fail(
+            f"Minimum comp ({comp_min_value:,}) is above maximum ({comp_max_value:,})."
+        )
 
     try:
         with db.transaction(conn):  # company + job + application + event, or nothing
@@ -276,8 +344,8 @@ def create_application(
                 location=location.strip() or None,
                 remote=remote,
                 jd_text=jd_text.strip() or None,
-                comp_min=int(comp_min) if comp_min.strip() else None,
-                comp_max=int(comp_max) if comp_max.strip() else None,
+                comp_min=comp_min_value,
+                comp_max=comp_max_value,
                 posted_at=posted_at or None,
             )
             application_id = states.create(
@@ -293,6 +361,21 @@ def create_application(
             )
             if note.strip():
                 states.log_event(conn, application_id, "note", detail=note.strip())
+            # Inside the transaction with everything else: an outcome that can't
+            # be walked rolls the application back rather than leaving a half-
+            # entered row the form then refuses to re-create.
+            if outcome:
+                path = (
+                    [states.INTERVIEW, states.OFFER]
+                    if outcome == states.OFFER
+                    else [outcome]
+                )
+                for step in path:
+                    states.transition(
+                        conn, application_id, step, detail="manual entry: known outcome"
+                    )
+    except states.InvalidTransition as exc:
+        return fail(str(exc))
     except sqlite3.IntegrityError as exc:
         existing = queries.find_job_by_url(conn, apply_url)
         if existing:
@@ -307,16 +390,6 @@ def create_application(
         return fail(f"The database rejected that: {exc}")
     except ValueError as exc:
         return fail(str(exc))
-
-    # Outcome already known at entry time: real transitions, not a backdated state.
-    if outcome:
-        path = (
-            [states.INTERVIEW, states.OFFER] if outcome == states.OFFER else [outcome]
-        )
-        for step in path:
-            states.transition(
-                conn, application_id, step, detail="manual entry: known outcome"
-            )
 
     return RedirectResponse(f"/applications/{application_id}", status_code=303)
 
@@ -361,6 +434,11 @@ def post_transition(
 def post_note(
     request: Request, conn: Conn, application_id: int, detail: Annotated[str, Form()]
 ) -> Response:
+    # Checked first: log_event would otherwise insert straight into `events` and
+    # surface the foreign-key violation as a 500 instead of a 404, which is what
+    # post_transition already does correctly.
+    if queries.get_application(conn, application_id) is None:
+        raise HTTPException(404, "no such application")
     if detail.strip():
         states.log_event(conn, application_id, "note", detail=detail.strip())
     return _state_panel(request, conn, application_id)
@@ -390,6 +468,109 @@ def _state_panel(request: Request, conn: sqlite3.Connection, application_id: int
         "_state_panel.html",
         {"app": application, "events": queries.events_for(conn, application_id)},
     )
+
+
+# =================================== tailor ===================================
+#
+# The Phase 2 gate: paste a JD, get a tailored PDF plus a diff against master.
+# `.claude/rules/tailoring.md` requires the diff before the resume is used, and
+# requires that a diff which cannot be produced blocks the packet — so a
+# validation failure renders the reason here instead of a PDF link.
+
+
+@app.get("/tailor", response_class=HTMLResponse)
+def tailor_form(request: Request, conn: Conn) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "tailor.html",
+        {"page": "tailor", "corpus": _corpus_size(conn), "jd_text": "", "result": None,
+         "error": None},
+    )
+
+
+@app.post("/tailor", response_class=HTMLResponse)
+def post_tailor(
+    request: Request,
+    conn: Conn,
+    jd_text: Annotated[str, Form()],
+    limit: Annotated[int, Form()] = 10,
+) -> Response:
+    context: dict[str, Any] = {
+        "page": "tailor",
+        "corpus": _corpus_size(conn),
+        "jd_text": jd_text,
+        "result": None,
+        "error": None,
+    }
+    if not jd_text.strip():
+        context["error"] = "Paste a job description first."
+        return templates.TemplateResponse(request, "tailor.html", context, status_code=422)
+
+    try:
+        result = tailor.tailor(
+            conn,
+            jd_text,
+            limit=max(1, min(limit, 30)),
+            # One JD pasted by hand. Nothing follows inside the 5-minute cache
+            # TTL, so writing an entry here is a 125% charge against a read that
+            # never happens. Phase 3's queue worker is the caller that wants it.
+            expect_repeat=False,
+        )
+    except tailor.FabricationError as exc:
+        # Not an error page: this is the guarantee working, and seeing exactly
+        # what was rejected is the point.
+        context["error"] = f"Rejected — the model asserted something the corpus does not support.\n\n{exc}"
+        return templates.TemplateResponse(request, "tailor.html", context, status_code=422)
+    # Named causes only. This was `(tailor.TailorError, Exception)`, which is
+    # just `Exception` — every bug in the request path rendered as a tidy 422
+    # telling me the tailoring failed, when the truth was a TypeError I wanted
+    # to see. Anything unlisted now propagates and 500s.
+    except (tailor.TailorError, llm.LLMError) as exc:
+        context["error"] = f"{type(exc).__name__}: {exc}"
+        return templates.TemplateResponse(request, "tailor.html", context, status_code=422)
+
+    # Second precision collided: two tailors inside the same second wrote the
+    # same path, and the second silently overwrote the first. `out/` is
+    # disposable, but not while I still have the tab open.
+    stamp = config.utcnow().replace(":", "").replace("-", "")
+    # No company name in the filename — see CLAUDE.local.md, Discretion.
+    pdf_name = f"tailored_{stamp}_{secrets.token_hex(3)}.pdf"
+    try:
+        resume.render(
+            resume.build_document(conn, selection=result.selection()),
+            config.OUT_DIR / pdf_name,
+        )
+    except resume.ResumeError as exc:
+        context["error"] = f"Tailoring passed but the PDF did not render: {exc}"
+        return templates.TemplateResponse(request, "tailor.html", context, status_code=422)
+
+    context["result"] = {
+        "reasoning": result.reasoning,
+        "diff": tailor.diff(result),
+        "pdf": pdf_name,
+        "kept": len(result.bullets),
+        "reworded": sum(1 for b in result.bullets if b.changed),
+    }
+    return templates.TemplateResponse(request, "tailor.html", context)
+
+
+@app.get("/out/{filename}")
+def download_render(filename: str) -> Response:
+    """Serve a rendered PDF. `out/` is disposable; the DB holds what was sent."""
+    if "/" in filename or "\\" in filename or not filename.endswith(".pdf"):
+        raise HTTPException(404, "no such file")
+    path = (config.OUT_DIR / filename).resolve()
+    if not path.is_file() or config.OUT_DIR.resolve() not in path.parents:
+        raise HTTPException(404, "no such file")
+    return FileResponse(path, media_type="application/pdf", filename=filename)
+
+
+def _corpus_size(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        "bullets": conn.execute("SELECT COUNT(*) AS n FROM bullets").fetchone()["n"],
+        "experiences": conn.execute("SELECT COUNT(*) AS n FROM experiences").fetchone()["n"],
+        "projects": conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"],
+    }
 
 
 # =================================== stats ===================================
@@ -501,6 +682,7 @@ def stats(request: Request, conn: Conn) -> Response:
             "overall": queries.overall(conn),
             "honesty": queries.honesty(conn),
             "health": queries.queue_health(conn),
+            "spend": queries.llm_spend(conn),
             **view,
         },
     )
