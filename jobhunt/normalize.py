@@ -34,21 +34,35 @@ def _is_tracking(key: str) -> bool:
     return lowered in TRACKING_PARAMS or lowered.startswith(TRACKING_PREFIXES)
 
 
+class UnparseableURL(ValueError):
+    """An apply URL that `urlsplit` cannot make sense of."""
+
+
 def normalize_apply_url(url: str) -> str:
     """Produce the hard dedup key for `jobs.apply_url_norm`.
 
     Lowercases scheme and host, drops `www.`, forces https, strips the trailing
     slash and the fragment, and drops known source tags. Surviving params are
     sorted so param order can't produce two keys for one posting.
-    """
-    parts = urlsplit(url.strip())
-    if not parts.netloc:  # bare "example.com/jobs/1" parses as all-path
-        parts = urlsplit(f"https://{url.strip()}")
 
-    host = parts.hostname or ""
-    host = host.removeprefix("www.")
-    if parts.port and parts.port not in (80, 443):
-        host = f"{host}:{parts.port}"
+    Raises `UnparseableURL` rather than inventing a key. This is the dedup guard —
+    a silently mangled key is worse than a rejected paste, because it lets one
+    posting be tracked twice.
+    """
+    try:
+        parts = urlsplit(url.strip())
+        if not parts.netloc:  # bare "example.com/jobs/1" parses as all-path
+            parts = urlsplit(f"https://{url.strip()}")
+
+        host = parts.hostname or ""
+        host = host.removeprefix("www.")
+        # .port itself raises on a non-numeric or out-of-range port.
+        port = parts.port
+    except ValueError as exc:
+        raise UnparseableURL(f"can't parse that apply URL ({exc}): {url.strip()!r}") from exc
+
+    if port and port not in (80, 443):
+        host = f"{host}:{port}"
 
     path = parts.path.rstrip("/")
     kept = sorted(
@@ -58,9 +72,17 @@ def normalize_apply_url(url: str) -> str:
 
 
 def detect_ats(apply_url: str) -> tuple[str | None, str | None]:
-    """Return `(ats_type, ats_slug)` derived from the apply URL."""
-    parts = urlsplit(apply_url if "//" in apply_url else f"https://{apply_url}")
-    host = (parts.hostname or "").lower().removeprefix("www.")
+    """Return `(ats_type, ats_slug)` derived from the apply URL.
+
+    Total by design: this runs on every row of the index and the stats tables, so
+    one unparseable URL must not take those pages down. Unrecognized and
+    unparseable both mean "bucket it as other / direct".
+    """
+    try:
+        parts = urlsplit(apply_url if "//" in apply_url else f"https://{apply_url}")
+        host = (parts.hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return None, None
     target = f"{host}{parts.path}"
     for name, pattern in ATS_PATTERNS:
         match = pattern.match(target)

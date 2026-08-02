@@ -62,6 +62,31 @@ def date_to_utc(value: str) -> str:
     return parsed.strftime("%Y-%m-%dT12:00:00Z")
 
 
+def to_utc_timestamp(value: str) -> str:
+    """Normalize a date or ISO 8601 timestamp to the stored TEXT form, or raise.
+
+    `jobs.posted_at` is the second field that took a user string straight to the
+    column — `'not-a-date'` stored cleanly, which poisons the posted-to-discovered
+    lag that the aggregator-staleness check reads. Unlike `date_to_utc` this also
+    accepts a full timestamp, because Phase 4 ingest gets both shapes back from
+    aggregators: `2026-07-15` from one, `2026-07-15T09:30:00+02:00` from another.
+    """
+    text = (value or "").strip()
+    if not text:
+        raise ValueError("expected a date or timestamp, got nothing")
+    if len(text) == 10:  # bare date; midday, for the reason in date_to_utc
+        return date_to_utc(text)
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"expected an ISO 8601 date or timestamp, got {text!r}"
+        ) from exc
+    if parsed.tzinfo is None:  # naive means UTC here, never local
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def days_ago(days: int) -> str:
     """Cutoff timestamp for rolling windows, so no query inlines datetime('now')."""
     return (datetime.now(timezone.utc) - timedelta(days=days)).strftime(

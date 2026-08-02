@@ -108,6 +108,10 @@ def create(
     is the guard against double-tracking one posting, not an `if exists` check.
     """
     _check(None, state)
+    if would_apply_anyway is not None and would_apply_anyway not in (0, 1):
+        # The column CHECK is the real guard (002). This one exists so the entry
+        # form can report it as a field error instead of a database rejection.
+        raise ValueError("would_apply_anyway is 0 or 1")
     now = config.utcnow()
     if state == APPLIED and applied_at is None:
         applied_at = now

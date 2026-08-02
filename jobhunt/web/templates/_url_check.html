@@ -1,4 +1,6 @@
-{% if existing %}
+{% if unparseable %}
+  <div class="notice warn">{{ unparseable }}</div>
+{% elif existing %}
   <div class="notice dup">
     Already tracked: <strong>{{ existing.title }}</strong>
     {% if application %}
