@@ -50,7 +50,8 @@ question wording for its seed data. Phase 5 benefits from real rejection emails 
       from writes on `llm_calls` and gives `stop_reason` its own column.
 - [x] `make load-profile` imports it; re-running is idempotent
       (verified: three consecutive runs, identical counts)
-- [x] RenderCV pipeline: master data → PDF — **renders, but the format is wrong. See below.**
+- [x] RenderCV pipeline: master data → PDF — reworked onto the `engineeringresumes`
+      theme after the first real render; a tailored resume now fits one page
 - [x] Tailor prompt receives bullet rows with IDs, returns selected IDs plus reworded text
 - [x] Validator per `.claude/rules/tailoring.md`, raising on any unsourced claim
       — with four known holes, below
@@ -64,22 +65,28 @@ deliberately fabricated claim in testing.
 fixtures catch every fabrication they name. Two things are open, and Phase 3 builds packets on
 top of both, so they are cheaper to fix now than after.
 
-### Open — resume format
+### Resume format — fixed 2026-08-03
 
-The generated PDF has layout problems, seen on a real tailored render. **My own list, to be
-replaced by the actual one:**
+Reworked against a real render plus the layout in `oldProjects/cv-builder`, which is the
+ATS shape that has actually been used. Theme is now `engineeringresumes`, RenderCV's
+engineering preset, rather than the decorative `classic`.
 
-- Only one of three projects carries a URL, so one renders as a link and two as plain text.
-- `FireProofSheep` has no `start_month` / `end_month`, so its entry lacks the date column the
-  others have. That is missing corpus data, not a renderer bug.
-- The `Technologies` line is one long comma-joined run. `_tech_union` flattens
-  built/owned/maintained/touched into a single undifferentiated list.
-- Section order is whatever `build_cv` inserts, not a chosen order:
-  experience → projects → education → skills → languages → posters.
-- Master resume is 7 pages. Fine as a diff baseline, unusable as a resume — worth confirming
-  that is the intent.
-- Unverified against `.claude/rules/tailoring.md`: whether dates actually render as
-  `Jan 2023 – Mar 2025`.
+Fixed: the date is inline with the company instead of owning a column that squeezed every
+bullet to 75% width; location is gone from the entry header; the `1 year 8 months` span is
+gone; education renders as one line instead of `Master / State University, Computer
+Science / of / Science`; project blurbs no longer render as unbulleted paragraphs; the
+languages and posters sections are gone; and skills are capped at 22 so a tailored resume
+fits one page. Verified: 10 selected bullets → 1 page. Master is 6 pages, which is correct
+for a diff baseline.
+
+Still open, both corpus data rather than renderer bugs:
+
+- `FireProofSheep` has no `start_month` / `end_month`, so it is the one project with no date.
+- It is also the only project with a `url`, so its name renders bold **and** underlined while
+  the others are bold alone. Either give the others URLs or drop this one.
+
+And one open question: `cv-builder` puts Skills second, right below the header. `build_cv`
+currently emits it last. Section order there is insertion order, not a chosen one.
 
 ### Open — validator holes found auditing this phase
 
