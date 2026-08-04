@@ -573,6 +573,113 @@ def _corpus_size(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
+# ================================= fill helper =================================
+#
+# The pain this exists for: an ATS makes you retype every role into separate
+# Company / Title / Start / End / Description fields, and the same information
+# is already on the resume it just accepted. That is most of the ten minutes.
+#
+# This is not autofill and deliberately not a browser extension — see
+# docs/architecture.md, "Why no browser automation". It is the same data laid out
+# one field per box with a copy button, which needs no per-ATS adapter and cannot
+# break when Workday ships a change. The content is identical for every
+# application, so it does not depend on a packet and works today.
+
+_MONTHS = ("January", "February", "March", "April", "May", "June",
+           "July", "August", "September", "October", "November", "December")
+
+
+def _date_forms(month: str | None) -> dict[str, str] | None:
+    """`YYYY-MM` in every shape an ATS asks for, because they disagree.
+
+    Workday wants a month name or number from a dropdown and the year separately,
+    Greenhouse takes `MM/YYYY`, a few want the ISO month. Rendering all of them
+    beats retyping or doing the conversion in my head at 11pm.
+    """
+    if not month:
+        return None
+    text = str(month).strip()
+    parts = text.split("-")
+    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        return None
+    year, number = parts[0], int(parts[1])
+    if not 1 <= number <= 12:
+        return None
+    return {
+        "iso": f"{year}-{number:02d}",
+        "slash": f"{number:02d}/{year}",
+        "month": f"{number:02d}",
+        "month_name": _MONTHS[number - 1],
+        "year": year,
+    }
+
+
+def _described(rows: list[sqlite3.Row]) -> tuple[list[str], str]:
+    """Bullets, and the one block that goes in a Description textarea."""
+    bullets = [row["text"] for row in rows]
+    return bullets, "\n".join(f"• {text}" for text in bullets)
+
+
+@app.get("/fill", response_class=HTMLResponse)
+def fill_helper(request: Request, conn: Conn) -> Response:
+    facts = queries.profile_facts(conn)
+    identity = [
+        (label, facts.get(key))
+        for label, key in (
+            ("Legal name", "identity.legal_name"),
+            ("Preferred name", "identity.preferred_name"),
+            ("Email", "identity.email"),
+            ("Phone", "identity.phone"),
+            ("City", "identity.city"),
+            ("State", "identity.state"),
+            ("LinkedIn", "identity.linkedin"),
+            ("GitHub", "identity.github"),
+            ("Website", "identity.website"),
+        )
+        if facts.get(key)
+    ]
+
+    bullets = queries.corpus_bullets(conn)
+    by_experience: dict[int, list[sqlite3.Row]] = {}
+    by_project: dict[int, list[sqlite3.Row]] = {}
+    for row in bullets:
+        if row["experience_id"] is not None:
+            by_experience.setdefault(int(row["experience_id"]), []).append(row)
+        else:
+            by_project.setdefault(int(row["project_id"]), []).append(row)
+
+    experiences = []
+    for row in queries.corpus_experiences(conn):
+        items, block = _described(by_experience.get(int(row["id"]), []))
+        experiences.append({
+            "company": row["company"], "title": row["title"],
+            "location": row["location"], "employment_type": row["employment_type"],
+            "start": _date_forms(row["start_month"]), "end": _date_forms(row["end_month"]),
+            "bullets": items, "description": block,
+        })
+
+    projects = []
+    for row in queries.corpus_projects(conn):
+        items, block = _described(by_project.get(int(row["id"]), []))
+        projects.append({
+            "name": row["name"], "url": row["url"], "role": row["role"],
+            "start": _date_forms(row["start_month"]), "end": _date_forms(row["end_month"]),
+            "bullets": items, "description": block,
+        })
+
+    education = [
+        {"school": row["school"], "degree": row["degree"], "field": row["field"],
+         "start": _date_forms(row["start_month"]), "end": _date_forms(row["end_month"])}
+        for row in queries.corpus_education(conn)
+    ]
+
+    return templates.TemplateResponse(
+        request, "fill.html",
+        {"page": "fill", "identity": identity, "experiences": experiences,
+         "projects": projects, "education": education},
+    )
+
+
 # =================================== stats ===================================
 
 
