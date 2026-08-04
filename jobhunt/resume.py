@@ -328,7 +328,22 @@ def build_cv(
 
     if not sections:
         raise ResumeError("the corpus is empty. Run `make load-profile` first.")
-    return {**_header(facts), "sections": sections}
+    return {**_header(facts), "sections": _ordered(sections)}
+
+
+# RenderCV renders sections in the order the mapping gives them, so until now the
+# order was whichever order `build_cv` happened to write them in — skills last,
+# because that is where the code that builds it sits. This makes it a decision.
+# Skills lead, as in oldProjects/cv-builder: it is the section a keyword screen
+# reads first, and it is the cheapest one for a human to skim.
+_SECTION_ORDER = ("skills", "experience", "projects", "education")
+
+
+def _ordered(sections: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    """`sections`, in resume order. Anything unlisted keeps its position, last."""
+    known = [name for name in _SECTION_ORDER if name in sections]
+    rest = [name for name in sections if name not in _SECTION_ORDER]
+    return {name: sections[name] for name in (*known, *rest)}
 
 
 # Credential kinds that earn a section on the resume. `poster` is deliberately
