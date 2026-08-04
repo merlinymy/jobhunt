@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Packet · {{ app.title }}{% endblock %}
+
+{% block main %}
+<h1>{{ app.title }}</h1>
+<p class="sub">
+  {{ app.company }} · {{ where }}
+  {% if app.score %} · score {{ app.score|int }}{% endif %}
+  · <span class="mono">{{ app.state }}</span>
+</p>
+
+{% if referral %}
+  <div class="notice ok">🤝 You know <strong>{{ referral }}</strong> here — ping before applying.</div>
+{% endif %}
+
+<div id="packet-body">{% include "_packet_body.html" %}</div>
+
+<h2>Fill</h2>
+<p class="muted">
+  Try the portal's <strong>“autofill with resume”</strong> first — the PDF parses cleanly and
+  usually populates work history on its own. The <a href="/fill">fill helper</a> has every
+  field one click away for whatever it gets wrong.
+</p>
+
+<h2>Done?</h2>
+<form hx-post="/applications/{{ app.id }}/transition" hx-target="#packet-state" hx-swap="innerHTML">
+  <input type="hidden" name="to_state" value="applied">
+  <input type="hidden" name="detail" value="submitted from the packet">
+  <button type="submit" {% if app.state != 'packet_ready' %}disabled{% endif %}>I applied</button>
+</form>
+<div id="packet-state"></div>
+{% endblock %}

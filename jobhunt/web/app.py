@@ -8,6 +8,7 @@ favour of a pull queue on `/review`.
 
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
@@ -675,6 +676,123 @@ def review_approve(request: Request, conn: Conn, application_id: int) -> Respons
 @app.post("/review/{application_id}/skip", response_class=HTMLResponse)
 def review_skip(request: Request, conn: Conn, application_id: int) -> Response:
     return _decide(request, conn, application_id, states.SKIPPED)
+
+
+# =================================== packet ===================================
+#
+# What `/review` approve leads to. `tailor.build_packet` does the work; this is
+# the view over it, plus the button that triggers a build on demand.
+#
+# On demand *and* batched: `make tailor` builds every `job_approved` row for the
+# scheduled path, and this button exists because approving something and waiting
+# for a launchd timer is not how anyone actually applies to a job.
+
+
+def _packet_context(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]:
+    app = queries.get_application(conn, application_id)
+    if app is None:
+        raise HTTPException(404, "no such application")
+
+    row = conn.execute(
+        """
+        SELECT j.apply_url, j.jd_text, j.location, j.remote, a.resume_data,
+               (SELECT ct.name FROM contacts ct
+                 WHERE ct.company_id = j.company_id AND ct.do_not_contact = 0
+                 ORDER BY ct.id LIMIT 1) AS referral
+          FROM applications a JOIN jobs j ON j.id = a.job_id
+         WHERE a.id = ?
+        """,
+        (application_id,),
+    ).fetchone()
+
+    where = row["location"] or "—"
+    if (row["remote"] or "").lower() == "remote":
+        where = f"Remote · {where}" if row["location"] else "Remote"
+
+    # The diff is rebuilt from `resume_data` — the exact document that produced
+    # the stored bytes — rather than re-tailoring. Re-running the model would
+    # show a diff against a resume I never downloaded.
+    diff: list[dict[str, Any]] = []
+    pdf_meta = None
+    if row["resume_data"]:
+        try:
+            document = json.loads(row["resume_data"])
+        except json.JSONDecodeError:
+            document = {}
+        selected: list[str] = []
+        for entries in (document.get("cv", {}).get("sections", {}) or {}).values():
+            for entry in entries:
+                if isinstance(entry, dict):
+                    selected.extend(entry.get("highlights", []) or [])
+        sources = {row["text"]: row for row in queries.corpus_bullets(conn)}
+        for text in selected:
+            source = sources.get(text)
+            diff.append({
+                "bullet_id": int(source["id"]) if source else "—",
+                "before": source["text"] if source else "(reworded — see the PDF)",
+                "after": text,
+                "changed": source is None,
+            })
+        pdf_meta = {
+            "bullets": len(selected),
+            "reworded": sum(1 for d in diff if d["changed"]),
+        }
+
+    return {
+        "page": "packet", "app": app, "where": where,
+        "apply_url": row["apply_url"], "referral": row["referral"],
+        "has_jd": bool((row["jd_text"] or "").strip()),
+        "diff": diff, "pdf": pdf_meta, "error": None,
+    }
+
+
+@app.get("/packet/{application_id}", response_class=HTMLResponse)
+def packet(request: Request, conn: Conn, application_id: int) -> Response:
+    return templates.TemplateResponse(
+        request, "packet.html", _packet_context(conn, application_id)
+    )
+
+
+@app.post("/packet/{application_id}/build", response_class=HTMLResponse)
+def packet_build(request: Request, conn: Conn, application_id: int) -> Response:
+    """Tailor, render, store, advance. Synchronous — it is one model call."""
+    error = None
+    try:
+        tailor.build_packet(conn, application_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except tailor.NoJobDescription as exc:
+        error = str(exc)
+    except tailor.FabricationError as exc:
+        # The guarantee working, not a crash. Nothing was rendered and the row
+        # stays `job_approved`, so it can be retried or done by hand.
+        error = f"Rejected — the model asserted something the corpus does not support.\n\n{exc}"
+    except (tailor.TailorError, llm.LLMError, resume.ResumeError) as exc:
+        error = f"{type(exc).__name__}: {exc}"
+
+    context = _packet_context(conn, application_id)
+    context["error"] = error
+    return templates.TemplateResponse(request, "_packet_body.html", context)
+
+
+@app.get("/packet/{application_id}/resume.pdf")
+def packet_resume(conn: Conn, application_id: int) -> Response:
+    """The stored bytes, not a re-render.
+
+    `.claude/rules/data-layer.md`: `resume_pdf` is the record of what was
+    actually sent. Serving a fresh render here would quietly make that false the
+    first time a template changed.
+    """
+    row = conn.execute(
+        "SELECT resume_pdf FROM applications WHERE id = ?", (application_id,)
+    ).fetchone()
+    if row is None or row["resume_pdf"] is None:
+        raise HTTPException(404, "no packet built for this application")
+    return Response(
+        content=row["resume_pdf"],
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="resume_{application_id}.pdf"'},
+    )
 
 
 # ================================= fill helper =================================

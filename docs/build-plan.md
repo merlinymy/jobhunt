@@ -125,7 +125,10 @@ Fixture count is 55, up from 48; all 102 corpus bullets still validate verbatim.
 - [ ] `docs/profile/stories.md` written (intake sections E, F), loaded into `stories`
 - [ ] `chat` worker: walks intake sections, writes to DB, appends new answers
 - [ ] Answer resolution chain (company override → global → generate → unknown)
-- [ ] Packet view renders the full answer set in likely form order, with copy buttons
+- [~] Packet view. `/packet/{id}` exists: apply link, tailored PDF served from the stored
+      bytes, diff against master, referral flag, "I applied". Structured fields (identity,
+      work history, projects, education) are on `/fill` with copy buttons. **What is missing
+      is the free-text answer set** — the narrative questions — which needs the answer bank.
 - [ ] Unknown questions land in `unknown_questions` and flag on the packet
 
 **Gate:** A packet renders a complete answer set, and a question I've never seen gets captured

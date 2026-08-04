@@ -24,7 +24,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import llm, queries
+from . import config, llm, queries, states
+from .db import transaction
 
 # Every number the resume asserts must come from its own source row. There is no
 # allowance for "small" numbers: a blanket whitelist of 1-10 let `18%` become
@@ -719,13 +720,115 @@ def diff(result: TailorResult) -> list[dict[str, Any]]:
     ]
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Tailor against a JD file and print the diff.
+# =================================== packets ===================================
 
-    The Makefile has a `tailor` target and this module is what it runs; without
-    an entry point `make tailor` exited 0 having done nothing. Building packets
-    for every `job_approved` row is Phase 3 — this is the single-JD path the
-    Phase 2 gate describes.
+
+class NoJobDescription(TailorError):
+    """The posting has no JD stored, so there is nothing to tailor against."""
+
+
+def build_packet(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]:
+    """`job_approved` -> tailored PDF stored on the row -> `packet_ready`.
+
+    The PDF bytes and the RenderCV input that produced them are written here and
+    never rewritten. `.claude/rules/data-layer.md` calls `resume_pdf` the record
+    of what was actually sent, and freezing it at build time is what makes that
+    true: a packet built today and submitted next week carries the resume I
+    actually downloaded, not whatever the templates render by then.
+
+    Rendering happens before the transition and inside the same transaction as
+    it, so a failed render leaves the row in `job_approved` to retry rather than
+    in `packet_ready` with nothing attached.
+    """
+    from pathlib import Path
+
+    from . import resume
+
+    row = conn.execute(
+        """
+        SELECT a.id, a.state, j.title, j.jd_text, c.name AS company
+          FROM applications a
+          JOIN jobs j      ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.id = ?
+        """,
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"no application {application_id}")
+    if row["state"] != states.JOB_APPROVED:
+        raise TailorError(
+            f"application {application_id} is {row['state']!r}; a packet is built "
+            f"from {states.JOB_APPROVED!r}"
+        )
+
+    jd = (row["jd_text"] or "").strip()
+    if not jd:
+        # Rippling and BambooHR return no description at all. Say so plainly —
+        # tailoring against an empty JD would select bullets at random and the
+        # result would look like a real packet.
+        raise NoJobDescription(
+            f"no job description stored for application {application_id}. "
+            f"Paste one on /tailor, or apply from the master resume."
+        )
+
+    result = tailor(conn, jd, limit=10, application_id=application_id)
+    document = resume.build_document(conn, selection=result.selection())
+    # Never a company name in the filename — CLAUDE.local.md, Discretion.
+    out_path = config.OUT_DIR / f"packet_{application_id}.pdf"
+    resume.render(document, Path(out_path))
+    pdf_bytes = Path(out_path).read_bytes()
+
+    with transaction(conn):
+        conn.execute(
+            "UPDATE applications SET resume_pdf = ?, resume_data = ?, updated_at = ? "
+            "WHERE id = ?",
+            (pdf_bytes, json.dumps(document), config.utcnow(), application_id),
+        )
+        states.transition(
+            conn,
+            application_id,
+            states.PACKET_READY,
+            detail=f"packet: {len(result.bullets)} bullets, {len(pdf_bytes):,} bytes",
+        )
+    return {
+        "application_id": application_id,
+        "bullets": len(result.bullets),
+        "reworded": sum(1 for b in result.bullets if b.changed),
+        "bytes": len(pdf_bytes),
+        "reasoning": result.reasoning,
+    }
+
+
+def build_pending(conn: sqlite3.Connection, limit: int | None = None) -> dict[str, int]:
+    """Build a packet for every `job_approved` row. What `make tailor` runs."""
+    rows = conn.execute(
+        "SELECT id FROM applications WHERE state = ? ORDER BY id"
+        + (f" LIMIT {int(limit)}" if limit else ""),
+        (states.JOB_APPROVED,),
+    ).fetchall()
+    counts = {"pending": len(rows), "built": 0, "no_jd": 0, "failed": 0}
+    for row in rows:
+        try:
+            build_packet(conn, int(row["id"]))
+            counts["built"] += 1
+        except NoJobDescription as exc:
+            print(f"  - {exc}", file=sys.stderr)
+            counts["no_jd"] += 1
+        except (TailorError, llm.LLMError) as exc:
+            # The row stays `job_approved`, so a rerun retries it. One bad
+            # posting must not stop the queue.
+            print(f"  ! application {row['id']}: {exc}", file=sys.stderr)
+            counts["failed"] += 1
+    return counts
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Build packets for the approved queue, or tailor against one JD file.
+
+    With no argument this is the worker `docs/architecture.md` describes: every
+    `job_approved` row gets a packet. `JD=path` keeps the single-posting path,
+    which is how the prompt gets tuned without approving something first.
     """
     import argparse
     from pathlib import Path
@@ -742,18 +845,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pdf", default=None, help="also render a PDF here")
     args = parser.parse_args(argv)
 
-    # `make tailor` with no JD used to die on argparse's usage line, which reads
-    # as a broken target rather than an unbuilt one. Say which it is.
+    # No JD given means the queue, which is the ordinary case.
     if not args.jd:
-        print(
-            "No job description given.\n\n"
-            "  make tailor JD=path/to/jd.txt      one JD, prints the diff\n"
-            "  .venv/bin/python -m jobhunt.tailor - --pdf out/x.pdf\n\n"
-            "Building packets for every `job_approved` row — what the command\n"
-            "table in CLAUDE.md describes — is Phase 3 and is not written yet.",
-            file=sys.stderr,
-        )
-        return 2
+        conn = connect()
+        try:
+            counts = build_pending(conn, args.limit if args.limit != 10 else None)
+        finally:
+            conn.close()
+        if not counts["pending"]:
+            print("nothing approved — approve something on /review first")
+            return 0
+        print(" · ".join(f"{v} {k}" for k, v in counts.items()))
+        return 1 if counts["failed"] else 0
 
     jd_text = sys.stdin.read() if args.jd == "-" else Path(args.jd).read_text()
 
