@@ -30,33 +30,59 @@ from . import config, queries
 
 RENDERCV_BIN = Path(sys.executable).parent / "rendercv"
 
-# Pinned to satisfy .claude/rules/tailoring.md. `classic` is single column with
-# standard headings; the footer and top note are the only places RenderCV would
-# otherwise repeat identifying text outside the body.
+# Pinned to satisfy .claude/rules/tailoring.md. `engineeringresumes` is
+# RenderCV's engineering/ATS preset: single column, black text, no icons, and
+# section titles ruled across the page. `classic` — the previous choice — is the
+# decorative theme, and it produced the layout defects listed below.
+#
+# Every template override here fixes one of them. RenderCV lays an entry out as
+# two columns, and whatever goes in the right-hand one reserves width down the
+# *whole* entry, not just its first line. So `LOCATION\nDATE`, the default, cost
+# a quarter of every bullet's width to show a location nobody wants on a resume.
 _DESIGN: dict[str, Any] = {
-    "theme": "classic",
+    "theme": "engineeringresumes",
     "page": {
         "size": "us-letter",
-        "top_margin": "0.6in",
-        "bottom_margin": "0.6in",
-        "left_margin": "0.65in",
-        "right_margin": "0.65in",
+        "top_margin": "0.5in",
+        "bottom_margin": "0.5in",
+        "left_margin": "0.5in",
+        "right_margin": "0.5in",
         "show_footer": False,
         "show_top_note": False,
     },
-    "typography": {"alignment": "left"},
+    "typography": {"alignment": "left", "font_size": {"body": "10pt"}},
     "links": {"underline": True, "show_external_link_icon": False},
-    # Without these an entry is an unbreakable block: a role with more bullets
-    # than fit on a page gets pushed whole to the next one, leaving the previous
-    # page blank and then overflowing with lines drawn on top of each other.
-    # A tailored resume is short enough never to hit it; the master resume,
-    # which is the diff baseline, hits it immediately.
-    "sections": {"allow_page_break": True},
-    "entries": {
+    "sections": {
+        # Without this an entry is an unbreakable block: a role with more bullets
+        # than fit on a page gets pushed whole to the next one, leaving the
+        # previous page blank and then overflowing with lines drawn on top of
+        # each other. The master resume hits it immediately.
         "allow_page_break": True,
-        # The degree gets its own column, and the default width wraps
-        # "Master of Science" onto three lines.
-        "degree_width": "3.4cm",
+        # Kills the "1 year 8 months" line under every date range. It reads as
+        # padding, and on a current role it re-dates the resume every month.
+        "show_time_spans_in": [],
+    },
+    "entries": {"allow_page_break": True, "short_second_row": False},
+    # One line per entry: bold primary, then the date right-aligned on the same
+    # line. Matches the layout in oldProjects/cv-builder, which is the ATS shape
+    # that has actually been used.
+    "templates": {
+        "experience_entry": {
+            "main_column": "**COMPANY**, POSITION\nSUMMARY\nHIGHLIGHTS",
+            "date_and_location_column": "DATE",
+        },
+        "normal_entry": {  # projects
+            "main_column": "**NAME**\nSUMMARY\nHIGHLIGHTS",
+            "date_and_location_column": "DATE",
+        },
+        "education_entry": {
+            # `degree_column` put "Master of Science" in a narrow column of its
+            # own, which wrapped to three lines and rendered as
+            # "Master / State University, Computer Science / of / Science".
+            "main_column": "**INSTITUTION**, DEGREE_WITH_AREA\nSUMMARY\nHIGHLIGHTS",
+            "degree_column": None,
+            "date_and_location_column": "DATE",
+        },
     },
 }
 
@@ -162,12 +188,23 @@ def _highlights(
     return [selection[bid] for bid in selection if bid in by_id]
 
 
-def _tech_union(rows: list[sqlite3.Row]) -> list[str]:
+# The Skills line is the one section with no natural length limit, and it was
+# the reason a tailored resume ran to two pages: ~50 entries, eleven lines,
+# more space than any single role. Truncation is safe because the ordering below
+# is strongest-claim-first, so what survives is what I actually built.
+MAX_TECHNOLOGIES = 22
+
+
+def _tech_union(rows: list[sqlite3.Row], *, limit: int = MAX_TECHNOLOGIES) -> list[str]:
     """Technologies across the corpus, deduped, strongest claim first.
 
     Ordered built -> owned -> maintained -> touched so that first use wins, but
     emitted as one line: `built` versus `touched` is the corpus's own vocabulary
     for how well I know something, and it is not a claim a resume should make.
+
+    Nothing here decides *relevance* to a given job — the ordering is by how well
+    I know a thing, not by what the posting asked for. Picking per-JD would mean
+    letting the tailor choose, which is a Phase 3 change to the prompt contract.
     """
     seen: dict[str, None] = {}
     for bucket in ("tech_built", "tech_owned", "tech_maintained", "tech_touched"):
@@ -175,7 +212,7 @@ def _tech_union(rows: list[sqlite3.Row]) -> list[str]:
             if bucket in row.keys():
                 for item in _json_list(row[bucket]):
                     seen.setdefault(item.strip(), None)
-    return [item for item in seen if item]
+    return [item for item in seen if item][:limit]
 
 
 # ================================ the document ================================
@@ -238,8 +275,11 @@ def build_cv(
         if row["url"]:
             name = f"[{name}]({row['url']})"  # markdown link, per RenderCV
         entry = {"name": name, **_dates(row["start_month"], row["end_month"])}
-        if row["blurb"]:
-            entry["summary"] = row["blurb"]
+        # `blurb` is deliberately not emitted as `summary`. RenderCV renders a
+        # summary as an unbulleted paragraph above the bullets, which is what
+        # made the ARC entry read as a wall of text with no bullet marker, and
+        # on a one-page resume a paragraph per project is the whole page. The
+        # blurb stays in the corpus — it is what the tailor reads for context.
         if highlights:
             entry["highlights"] = highlights
         project_entries.append(entry)
@@ -271,19 +311,15 @@ def build_cv(
     if technologies:
         sections["skills"] = [{"label": "Technologies", "details": ", ".join(technologies)}]
 
-    languages = queries.corpus_languages(conn)
-    if languages:
-        # One line, not one row per language: a language with no fluency recorded
-        # rendered as a dangling "English:" with nothing after the colon.
-        spoken = ", ".join(
-            f"{row['language']} ({row['fluency']})" if row["fluency"] else row["language"]
-            for row in languages
-        )
-        sections["languages"] = [{"label": "Spoken", "details": spoken}]
+    # No `languages` section. Spoken languages are not a hiring signal for these
+    # roles and the line cost a section heading to say "Chinese, English".
+    # `corpus_languages` still loads them; nothing on the resume reads it.
 
     credentials: dict[str, list[Any]] = {}
     for row in queries.corpus_credentials(conn):
-        heading = _CREDENTIAL_SECTIONS.get(row["kind"], "credentials")
+        heading = _CREDENTIAL_SECTIONS.get(row["kind"])
+        if heading is None:  # kind not shown on a resume — see below
+            continue
         detail = " · ".join(part for part in (row["issuer"], row["issued"]) if part)
         credentials.setdefault(heading, []).append(
             {"label": row["title"], "details": detail}
@@ -295,9 +331,14 @@ def build_cv(
     return {**_header(facts), "sections": sections}
 
 
+# Credential kinds that earn a section on the resume. `poster` is deliberately
+# absent: the one poster in the corpus is the ARC/PaperPrism presentation, and
+# the work itself is already a project entry with bullets, so the section
+# restated it under a heading of its own. Everything here is a one-line change
+# if that judgement turns out wrong — a kind missing from this map is skipped,
+# not crashed on.
 _CREDENTIAL_SECTIONS = {
     "cert": "certifications",
-    "poster": "posters",
     "license": "licenses",
     "publication": "publications",
     "talk": "talks",

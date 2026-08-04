@@ -582,6 +582,8 @@ def corpus_credentials(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def corpus_languages(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """UNWIRED. The resume dropped its languages section; the loader still fills
+    the table, and an answer in Phase 3 is the likely next reader."""
     return conn.execute("SELECT * FROM languages ORDER BY id").fetchall()
 
 
