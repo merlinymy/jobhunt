@@ -205,7 +205,9 @@ The tedium worth automating turned out to be the answer bank, not the clicking.
 Three dev machines, one host.
 
 - **Mac mini (24 GB)** — the only machine that runs the app. Holds `jobhunt.db`, the launchd
-  timers, and the dashboard. Always on, sleep disabled.
+  timers, and the dashboard. Always on, sleep disabled. Agents live in `deploy/` and are
+  installed with `make install-agents`, which refuses to proceed without confirming this is
+  the mini.
 - **Laptops (8 GB, 24 GB)** — dev clients. Clone the repo, edit code and `docs/profile/`,
   push through git. To use the app, hit the mini's dashboard over Tailscale.
 

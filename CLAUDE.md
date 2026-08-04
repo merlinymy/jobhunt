@@ -93,6 +93,7 @@ make score         # prefilter + LLM scoring on `discovered`
 make tailor        # build packets for `job_approved`
 make inbox         # poll Gmail, classify, update states
 make chat          # gap-filling: resolve unknown_questions, append answers
+make install-agents # launchd timers for ingest+score and the dashboard — mini only
 ```
 
 ## Conventions

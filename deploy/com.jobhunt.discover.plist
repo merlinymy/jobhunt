@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Scheduled discovery: ingest, then score. Twice a day, per docs/architecture.md.
+
+  06:30 and 18:30. The morning run has to be finished before I sit down to work
+  the review queue, and the whole thing takes roughly 25 minutes worst case —
+  five for the Indeed sweep at its jittered 8s pacing, ninety seconds for the
+  boards, and the rest waiting on a scoring batch.
+
+  RunAtLoad is deliberately false. It would fire a full scrape on every login
+  and every `launchctl load`, which is both rude to Indeed and a good way to
+  test a config change by accident.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobhunt.discover</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/deploy/discover.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd gives a minimal PATH. rendercv shells out to typst, and the
+         venv's bin has to come first. -->
+    <key>PATH</key>
+    <string>__REPO__/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- Explicit rather than relying on config.py's default. If the repo ever
+         moves, a wrong DB path should fail loudly, not quietly open a new one. -->
+    <key>JOBHUNT_DB</key>
+    <string>__DB__</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Background gets throttled harder by the scheduler, which is correct for a
+       job that is mostly sleeping between rate-limited HTTP calls. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__LOGS__/discover.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGS__/discover.log</string>
+</dict>
+</plist>

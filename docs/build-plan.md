@@ -181,7 +181,12 @@ rather than silently dropped.
       instead of two, and a pull queue needs none of the send-once machinery a push
       notification did: no bot token, no long polling, no once-per-day guard, nothing to
       configure before it works.
-- [ ] launchd plists for ingest and score
+- [x] launchd agents in `deploy/`, installed with `make install-agents`.
+      `com.jobhunt.discover` runs ingest then score at 06:30 and 18:30;
+      `com.jobhunt.dashboard` keeps the dashboard up. Written on the laptop,
+      **installed on the mini only** — the installer says so and asks before doing
+      anything, because two machines running these means two scrapers, two scoring
+      workers spending real money on the same rows, and two writers on one SQLite file.
 
 **Gate:** 8 jobs arrive in Telegram each weekday morning and ≥50% get
 `would_apply_anyway = 1`. Below that, tune the prefilter — not the LLM.

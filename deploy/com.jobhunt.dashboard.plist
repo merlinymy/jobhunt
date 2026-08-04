@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The dashboard, always on. docs/architecture.md: the mini holds the DB, the
+  timers, and this.
+
+  Binds to 127.0.0.1 only — `jobhunt.web.app.run_dev` refuses anything else, so
+  this cannot be widened by editing the plist. Reaching it from a laptop or a
+  phone is Tailscale to this port, never a wider bind address.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobhunt.dashboard</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>jobhunt.web.app</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__REPO__/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>JOBHUNT_DB</key>
+    <string>__DB__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Do not respawn faster than this. Without it, a dashboard that dies on
+       startup — a missing migration, say — restarts in a tight loop and fills
+       the log with the same traceback a thousand times a minute. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOGS__/dashboard.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGS__/dashboard.log</string>
+</dict>
+</plist>
