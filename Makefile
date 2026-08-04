@@ -21,14 +21,14 @@ load-profile: $(PY)  ## import docs/profile/* into SQLite; idempotent, re-runnab
 dev: $(PY)  ## dashboard on localhost:8000
 	$(PY) -m jobhunt.web.app
 
-ingest: $(PY)  ## one-shot discovery run
-	$(PY) -m jobhunt.ingest
+ingest: $(PY)  ## one-shot discovery run (ARGS=--boards-only to skip the scrape)
+	$(PY) -m jobhunt.ingest $(ARGS)
 
 score: $(PY)  ## prefilter + LLM scoring on `discovered`
-	$(PY) -m jobhunt.score
+	$(PY) -m jobhunt.score $(ARGS)
 
-digest: $(PY)  ## send today's Telegram digest
-	$(PY) -m jobhunt.digest
+digest: $(PY)  ## send today's Telegram digest (ARGS=--poll to handle button presses)
+	$(PY) -m jobhunt.digest $(ARGS)
 
 tailor: $(PY)  ## tailor against one JD: make tailor JD=path/to/jd.txt  (packets: Phase 3)
 	$(PY) -m jobhunt.tailor $(JD)
