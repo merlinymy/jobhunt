@@ -1,0 +1,45 @@
+{# One posting in the review queue. Swapped out of the list on a decision, so the
+   queue drains as I work it rather than needing a reload. #}
+<article class="review-card" id="review-{{ item.application_id }}">
+  <header>
+    <div>
+      <a class="title" href="{{ item.apply_url }}" target="_blank" rel="noopener">{{ item.title }}</a>
+      <div class="meta">
+        {{ item.company }} · {{ item.where }}
+        {% if item.comp %} · {{ item.comp }}{% endif %}
+      </div>
+    </div>
+    <div class="scorebox {% if item.score >= 80 %}good{% elif item.score >= 50 %}warn{% endif %}">
+      {{ item.score|int }}
+    </div>
+  </header>
+
+  {% if item.referral %}
+    {# A warm intro changes whether a marginal posting is worth ten minutes,
+       which is the actual constraint. #}
+    <p class="referral">🤝 You know <strong>{{ item.referral }}</strong> here — ping first.</p>
+  {% endif %}
+
+  {% if item.reason %}<p class="reason">{{ item.reason }}</p>{% endif %}
+
+  {% if item.excerpt %}
+    <details>
+      <summary>Job description</summary>
+      <pre class="block">{{ item.excerpt }}</pre>
+    </details>
+  {% endif %}
+
+  <footer>
+    {# hx-target the whole card: a decision removes it from the queue. #}
+    <form hx-post="/review/{{ item.application_id }}/approve"
+          hx-target="#review-{{ item.application_id }}" hx-swap="outerHTML">
+      <button type="submit" class="approve">✅ Approve</button>
+    </form>
+    <form hx-post="/review/{{ item.application_id }}/skip"
+          hx-target="#review-{{ item.application_id }}" hx-swap="outerHTML">
+      <button type="submit" class="skip">⏭ Skip</button>
+    </form>
+    <a class="quiet" href="/applications/{{ item.application_id }}">details</a>
+    <a class="quiet" href="{{ item.apply_url }}" target="_blank" rel="noopener">open posting ↗</a>
+  </footer>
+</article>

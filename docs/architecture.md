@@ -14,8 +14,8 @@ state each branch hangs off, and got two of them wrong.
 | — | `applied` | manual entry of an application I already submitted by hand. It never passed through discovery, so it seeds one honest event rather than a fabricated history |
 | `discovered` | `filtered` | deterministic prefilter rejects it — **terminal** |
 | `discovered` | `scored` | prefilter passes, LLM assigns score + reasoning |
-| `scored` | `skipped` | I decline it in the digest — **terminal** |
-| `scored` | `job_approved` | I approve it in the digest |
+| `scored` | `skipped` | I decline it on `/review` — **terminal** |
+| `scored` | `job_approved` | I approve it on `/review` |
 | `job_approved` | `expired` | posting gone before the packet was built — **terminal** |
 | `job_approved` | `packet_ready` | `tailor` renders the resume and resolves answers |
 | `packet_ready` | `expired` | posting gone before I submitted — **terminal** |
@@ -31,9 +31,9 @@ Note `applied → offer` is not a valid transition; an offer always passes throu
 | State | Meaning |
 | --- | --- |
 | `discovered` | ingested, deduped, not yet scored |
-| `scored` | has score + reasoning, awaiting my review in the digest |
+| `scored` | has score + reasoning, waiting in the `/review` queue |
 | `filtered` | killed by the deterministic prefilter (retained for stats) |
-| `job_approved` | I said yes in the Telegram digest |
+| `job_approved` | I said yes on `/review` |
 | `skipped` | I said no |
 | `packet_ready` | tailored resume + answer set generated, ready for me to submit |
 | `expired` | posting disappeared before I applied |
@@ -49,10 +49,9 @@ helper should reject any pair not in the table above rather than trusting caller
 | --- | --- | --- |
 | `ingest` | launchd, 2×/day | JobSpy (Indeed) + direct ATS board polls → normalize → dedup → `discovered` |
 | `score` | after ingest | deterministic prefilter, then LLM scoring on survivors (batch) |
-| `digest` | launchd, 8am weekdays | Telegram: top ~8 `scored`, inline approve/skip buttons |
 | `tailor` | on `job_approved` | render resume PDF + resolve answer set → `packet_ready` |
 | `inbox` | launchd, hourly | Gmail API → classify → write events, close forgotten `applied` |
-| `dashboard` | always on | packet view, "I applied" button, stats, manual entry |
+| `dashboard` | always on | review queue, packet view, fill helper, "I applied", stats |
 | `load-profile` | on demand | import `docs/profile/*` into SQLite; idempotent upsert |
 | `chat` | on demand | gap-filling only — resolves `unknown_questions`, appends to `answers` |
 
@@ -126,7 +125,7 @@ drops, "Member of Technical Staff" being the obvious case. That's a known gap, c
 a keyword when a real posting reveals it, not by pretending the matcher is exhaustive.
 
 Discipline (frontend / backend / full-stack) is deliberately not filtered: that's fit, which
-Pass 2 scores and I judge in the digest.
+Pass 2 scores and I judge on `/review`.
 
 **The old "must kill roughly 90%" target is void.** It was written when comp and location were
 both filters. Neither is now — title and level are what I actually reject on, so Pass 1 kills
@@ -144,20 +143,20 @@ tracks state pay-transparency law rather than job quality — so a comp floor un
 non-mandating states for reasons unrelated to the roles. `facts.yaml` `comp:` holds one
 pre-decided number, `walk_away`, which tells me when to leave a conversation and never rejects
 a posting. The figure I actually give an employer is decided at packet time and stored per
-company (see Answer resolution). Where a posting does state a range, the digest surfaces it and
+company (see Answer resolution). Where a posting does state a range, `/review` surfaces it and
 I skip it myself in one tap.
 
 **Pass 2, LLM.** Survivors get my profile summary plus the JD and return a 0–100 score with
 two sentences of reasoning. Runs through the Batch API — it isn't latency-sensitive, it just
-has to finish before the 8am digest. The profile summary is cached across all calls.
+has to finish before I sit down to review. The profile summary is cached across all calls.
 
 **Location ranks, it does not filter.** `scoring.yaml` `location_rank` is an ordered list
-ending in a catch-all, so nothing is rejected for where it is. The digest sorts by location
+ending in a catch-all, so nothing is rejected for where it is. `/review` sorts by location
 tier first, then by score within a tier. That order is deterministic on purpose: I stated the
 preference explicitly, so an LLM has no business re-deriving it. The LLM scores fit; the
 config decides which tier a posting sits in.
 
-Score never auto-advances state. It orders the digest, nothing more.
+Score never auto-advances state. It orders the review queue, nothing more.
 
 ### Answer resolution
 
@@ -190,7 +189,7 @@ The actual product. A dashboard view optimized for a manual 8–12 minute fill o
 5. Referral flag — matching `contacts` at this company, with a "ping first" prompt
 6. "I applied" button → sets `applied_at`, prompts for `would_apply_anyway`
 
-Telegram handles approvals and notifications. The dashboard handles filling.
+The dashboard is the whole interface: review and approve, tailor, fill, track.
 
 ## Why no browser automation
 

@@ -418,3 +418,40 @@ pre.block {
   border: 1px solid light-dark(#eee, #2a2a2a); border-radius: 6px;
   font-size: .85rem; line-height: 1.45;
 }
+
+/* ---- review queue ------------------------------------------------------- */
+.review-card {
+  border: 1px solid light-dark(#e3e3e6, #2b2b30);
+  border-radius: 9px; padding: .85rem 1rem; margin: .8rem 0;
+  background: light-dark(#fff, #191a1d);
+}
+.review-card header { display: flex; gap: 1rem; align-items: flex-start; justify-content: space-between; }
+.review-card .title { font-weight: 600; font-size: 1.02rem; text-decoration: none; }
+.review-card .title:hover { text-decoration: underline; }
+.review-card .meta { color: light-dark(#666, #999); font-size: .88rem; margin-top: .15rem; }
+.scorebox {
+  font-variant-numeric: tabular-nums; font-weight: 600; font-size: 1.1rem;
+  min-width: 2.6rem; text-align: center; padding: .2rem .45rem; border-radius: 6px;
+  background: light-dark(#f1f1f3, #232327);
+}
+.scorebox.good { background: light-dark(#dcfce7, #14361f); }
+.scorebox.warn { background: light-dark(#fef3c7, #3a2f10); }
+.review-card .referral {
+  margin: .5rem 0 0; padding: .35rem .6rem; border-radius: 6px; font-size: .9rem;
+  background: light-dark(#eff6ff, #16233a);
+}
+.review-card .reason { margin: .5rem 0 0; font-size: .92rem; color: light-dark(#444, #bbb); }
+.review-card footer { display: flex; gap: .5rem; align-items: center; margin-top: .7rem; }
+.review-card footer form { display: inline; margin: 0; }
+button.approve, button.skip { font: inherit; cursor: pointer; border-radius: 6px; padding: .3rem .8rem; }
+button.approve { background: light-dark(#16a34a, #15803d); color: #fff; border: none; }
+button.skip { background: transparent; border: 1px solid light-dark(#ccc, #444); color: inherit; }
+.review-card footer a.quiet { margin-left: auto; font-size: .85rem; color: light-dark(#777, #888); }
+.review-card footer a.quiet + a.quiet { margin-left: .8rem; }
+.review-card.decided {
+  display: flex; justify-content: space-between; align-items: center;
+  opacity: .65; font-size: .9rem; padding: .55rem 1rem;
+}
+.review-card.decided.approved { border-color: light-dark(#86efac, #2f6f45); }
+form.inline { display: flex; gap: .5rem; align-items: center; margin: .6rem 0 1rem; }
+form.inline input { width: 5rem; }

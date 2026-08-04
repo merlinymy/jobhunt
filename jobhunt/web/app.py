@@ -1,8 +1,9 @@
 """FastAPI + Jinja + HTMX dashboard.
 
 Localhost only. Cross-machine and phone access is Tailscale to this port, never a
-wider bind address. Telegram handles approvals and notifications; the dashboard
-handles filling and tracking.
+wider bind address. This is the whole interface: review and approve, tailor,
+fill, and track. There is no second surface — the Telegram digest was removed in
+favour of a pull queue on `/review`.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import config, db, llm, queries, resume, states, tailor
+from .. import config, db, llm, prefilter, queries, resume, states, tailor
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 
 HERE = Path(__file__).resolve().parent
@@ -571,6 +572,109 @@ def _corpus_size(conn: sqlite3.Connection) -> dict[str, int]:
         "experiences": conn.execute("SELECT COUNT(*) AS n FROM experiences").fetchone()["n"],
         "projects": conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"],
     }
+
+
+# =================================== review ===================================
+#
+# The curated queue, and the only place a job is approved. This replaced the
+# Telegram digest: same selection, same ordering, one surface instead of two.
+#
+# Dropping the push notification also dropped a whole class of guard. A digest
+# had to refuse a second send, because being messaged twice put sixteen postings
+# in front of me on a morning planned for eight. A pull queue cannot do that —
+# I look when I am ready to work and stop when I am done — so `digest_sent`,
+# the once-per-day check, and the long-polling callback handler all went with it.
+
+REVIEW_LIMIT = 8
+JD_EXCERPT = 1200
+
+
+def _review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
+    """Top `limit` scored postings, plus how many are waiting in total."""
+    rows = conn.execute(
+        """
+        SELECT a.id AS application_id, a.score, a.score_reasoning,
+               j.title, j.location, j.remote, j.apply_url, j.jd_text,
+               j.comp_min, j.comp_max, c.name AS company,
+               (SELECT ct.name FROM contacts ct
+                 WHERE ct.company_id = c.id AND ct.do_not_contact = 0
+                 ORDER BY ct.id LIMIT 1) AS referral
+          FROM applications a
+          JOIN jobs j      ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.state = ?
+        """,
+        (states.SCORED,),
+    ).fetchall()
+
+    cfg = prefilter.load()
+    ranked = sorted(
+        rows, key=lambda r: (prefilter.location_tier(r, cfg), -(r["score"] or 0))
+    )
+
+    batch = []
+    for row in ranked[:limit]:
+        where = row["location"] or "—"
+        if (row["remote"] or "").lower() == "remote":
+            where = f"Remote · {where}" if row["location"] else "Remote"
+        comp = None
+        if row["comp_min"] and row["comp_max"]:
+            comp = f"${row['comp_min'] // 1000}k–${row['comp_max'] // 1000}k"
+        elif row["comp_min"]:
+            comp = f"from ${row['comp_min'] // 1000}k"
+        elif row["comp_max"]:
+            comp = f"up to ${row['comp_max'] // 1000}k"
+        jd = (row["jd_text"] or "").strip()
+        batch.append({
+            "application_id": int(row["application_id"]),
+            "title": row["title"], "company": row["company"], "where": where,
+            "score": row["score"] or 0, "reason": row["score_reasoning"] or "",
+            "apply_url": row["apply_url"], "comp": comp, "referral": row["referral"],
+            "excerpt": (jd[:JD_EXCERPT] + "…") if len(jd) > JD_EXCERPT else jd,
+        })
+    return batch, len(rows)
+
+
+@app.get("/review", response_class=HTMLResponse)
+def review(
+    request: Request, conn: Conn, limit: Annotated[int, Query()] = REVIEW_LIMIT
+) -> Response:
+    limit = max(1, min(limit, 50))
+    batch, waiting = _review_batch(conn, limit)
+    return templates.TemplateResponse(
+        request, "review.html",
+        {"page": "review", "batch": batch, "waiting": waiting, "limit": limit},
+    )
+
+
+def _decide(request: Request, conn: sqlite3.Connection, application_id: int, to_state: str) -> Response:
+    row = queries.get_application(conn, application_id)
+    if row is None:
+        raise HTTPException(404, "no such application")
+    try:
+        states.transition(conn, application_id, to_state, detail="review queue")
+    except states.InvalidTransition as exc:
+        # Already decided elsewhere — two tabs, or a double-click. Say what it is
+        # rather than 500ing, and leave the card showing the real outcome.
+        raise HTTPException(409, str(exc)) from exc
+    return templates.TemplateResponse(
+        request, "_review_done.html",
+        {
+            "application_id": application_id,
+            "title": row["title"],
+            "outcome": "approved" if to_state == states.JOB_APPROVED else "skipped",
+        },
+    )
+
+
+@app.post("/review/{application_id}/approve", response_class=HTMLResponse)
+def review_approve(request: Request, conn: Conn, application_id: int) -> Response:
+    return _decide(request, conn, application_id, states.JOB_APPROVED)
+
+
+@app.post("/review/{application_id}/skip", response_class=HTMLResponse)
+def review_skip(request: Request, conn: Conn, application_id: int) -> Response:
+    return _decide(request, conn, application_id, states.SKIPPED)
 
 
 # ================================= fill helper =================================

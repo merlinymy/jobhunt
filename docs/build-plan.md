@@ -131,7 +131,7 @@ Fixture count is 55, up from 48; all 102 corpus bullets still validate verbatim.
 **Gate:** A packet renders a complete answer set, and a question I've never seen gets captured
 rather than silently dropped.
 
-## Phase 4 — discovery, scoring, digest
+## Phase 4 — discovery, scoring, review queue
 
 - [x] JobSpy ingest — **Indeed only. Google is dead.** Measured 2026-08-03 against
       python-jobspy 1.1.82: of the four US sources it exposes, `indeed` returned rows and
@@ -167,11 +167,12 @@ rather than silently dropped.
 - [x] Pass 2 LLM scoring via Batch API, model from `config/models.yaml` — `score.py`.
       ~$3 for the whole backlog at Haiku batch rates, and one-time: dedup means a posting
       is scored once ever. **The live API call is unverified** — needs `ANTHROPIC_API_KEY`.
-- [x] Telegram digest, top ~8, inline approve/skip, referral flag surfaced — `digest.py`.
-      Ordered by location tier then score. Two idempotence guards, not one: the
-      `digest_sent` index stops a posting going twice, and a same-day check stops a rerun
-      sending the *next* eight. **The live Telegram call is unverified** — needs a bot token.
-- [ ] launchd plists for ingest, score, digest
+- [x] Review queue at `/review`, top ~8, approve/skip, referral flag surfaced.
+      Ordered by location tier then score. **Replaced the Telegram digest** — one surface
+      instead of two, and a pull queue needs none of the send-once machinery a push
+      notification did: no bot token, no long polling, no once-per-day guard, nothing to
+      configure before it works.
+- [ ] launchd plists for ingest and score
 
 **Gate:** 8 jobs arrive in Telegram each weekday morning and ≥50% get
 `would_apply_anyway = 1`. Below that, tune the prefilter — not the LLM.

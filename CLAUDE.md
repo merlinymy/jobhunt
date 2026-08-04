@@ -11,7 +11,7 @@ shots on unreliable or missing data. `would_apply_anyway` is the check that this
 become volume; read it as the primary metric, not a footnote.
 
 **What I select on, in order: title, level, then location.** Title and level are the only hard
-filters. Location *ranks* the digest and never rejects — the preference list ends in a
+filters. Location *ranks* the review queue and never rejects — the preference list ends in a
 catch-all. Comp neither filters nor ranks; it exists to answer with. When adding a rule, decide
 first whether it rejects or merely orders, and default to ordering.
 
@@ -59,9 +59,9 @@ assertions that raise over tests that assert whatever the code currently does.
 - Tailoring may select, reorder, and reword rows from `bullets`. It may never introduce an
   employer, title, date, degree, or metric absent from those rows. The validator raises.
 - `answers.tier = 'fact'` is returned verbatim. Never LLM-generated, never paraphrased.
-- Workers are stateless and idempotent. Rerunning must not duplicate rows or re-send a
-  Telegram message. Guard on `jobs.apply_url_norm` and on `events`.
-- Score never advances state. It only orders the digest. I approve every job.
+- Workers are stateless and idempotent. Rerunning must not duplicate rows. Guard on
+  `jobs.apply_url_norm` and on `events`.
+- Score never advances state. It only orders the review queue. I approve every job.
 - `docs/profile/` is the source of truth for my profile; the DB is derived. Build a loader,
   never a CRUD editor for this data. Generated per-company narrative answers are the one
   exception — they accumulate in the DB only.
@@ -90,7 +90,6 @@ make load-profile  # import docs/profile/* into SQLite; idempotent, re-runnable
 make dev           # dashboard on localhost:8000
 make ingest        # one-shot discovery run
 make score         # prefilter + LLM scoring on `discovered`
-make digest        # send today's Telegram digest
 make tailor        # build packets for `job_approved`
 make inbox         # poll Gmail, classify, update states
 make chat          # gap-filling: resolve unknown_questions, append answers
@@ -119,8 +118,8 @@ the app.** It holds the DB, the launchd jobs, and the dashboard. The laptops are
   Keep this repo **private** — those files hold my legal name, email, phone, city, pay expectations,
   full work history, and a contact network with other people's names in it.
 - On the mini: launchd, not cron or systemd. Scheduled jobs need a logged-in GUI session.
-- Default Mac sleep silently kills the 8am digest: `sudo pmset -a sleep 0 disablesleep 1`.
-- Telegram uses long polling. No webhook, no port forwarding, no tunnel, no static IP.
+- Default Mac sleep silently kills the scheduled ingest and scoring runs:
+  `sudo pmset -a sleep 0 disablesleep 1`.
 - Never bind FastAPI beyond localhost. Cross-machine and phone access is Tailscale only.
 - SQLite in WAL mode. The DB holds every submitted PDF — back it up off-box nightly.
 

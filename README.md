@@ -22,7 +22,7 @@ Phase 1 is done. Phase 2 is next and is gated on my own data entry, not on code.
 | 1 | DB, state machine, dashboard | **done** — backfill of hand-submitted applications still pending |
 | 2 | Profile store, resume tailoring | next — needs `docs/profile/experience.yaml` filled |
 | 3 | Answer bank, chat intake | not started |
-| 4 | Discovery, scoring, Telegram digest | not started |
+| 4 | Discovery, scoring, review queue | ingest, prefilter, scoring and `/review` done; launchd pending |
 | 5 | Gmail inbox poller | not started |
 
 Only two commands are implemented so far. The rest are declared in the `Makefile` as the
@@ -37,7 +37,6 @@ interface to build against, and will fail with `ModuleNotFoundError` until their
 | `make chat` | resolve `unknown_questions`, append answers | Phase 3 |
 | `make ingest` | one-shot discovery run | Phase 4 |
 | `make score` | prefilter + LLM scoring | Phase 4 |
-| `make digest` | send today's Telegram digest | Phase 4 |
 | `make inbox` | poll Gmail, classify, update states | Phase 5 |
 
 ## Setup
@@ -83,7 +82,7 @@ Every state change writes an `events` row in the same transaction. `jobhunt/stat
 only place `applications.state` is written, and it rejects any transition absent from its
 table — including `applied → offer`, since an offer always passes through `interview`.
 
-Score orders the digest and nothing else. I approve every job.
+Score orders the review queue and nothing else. I approve every job.
 
 Full detail in [`docs/architecture.md`](docs/architecture.md); the schema in
 [`migrations/001_init.sql`](migrations/001_init.sql) is the source of truth.
@@ -137,13 +136,13 @@ These raise at runtime rather than living only in a document:
   it differs; add the next numbered file instead.
 - **Illegal state transitions are rejected**, and `log_event()` refuses to forge a
   `state_change`.
-- Schema-level: `jobs.apply_url_norm` and `applications.job_id` are UNIQUE, one `digest_sent`
-  event per application ever, one processed email per `email_msg_id`.
+- Schema-level: `jobs.apply_url_norm` and `applications.job_id` are UNIQUE, one processed
+  email per `email_msg_id`, and natural-key indexes on every table `make load-profile` writes.
 
 ## Machines
 
 Three Macs, one host. Only the **Mac mini** runs the app — it holds the database, the launchd
-jobs, and the dashboard, with sleep disabled so the morning digest fires. The laptops are dev
+jobs, and the dashboard, with sleep disabled so the scheduled runs fire. The laptops are dev
 clients: edit code and profile data, push through git, and reach the dashboard over Tailscale.
 Profile data syncs via git, never through the database.
 

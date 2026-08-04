@@ -28,8 +28,10 @@ These exist to make bad states unrepresentable rather than merely untested:
 - `answers.tier` CHECK in (`fact`, `narrative`)
 - `answers (question_key, company_id)` UNIQUE — no two answers to one question per company
 - `bullets` CHECK that exactly one of `experience_id` / `project_id` is set
-- Partial unique index on `events` for `digest_sent` — one notification per application, ever
 - Partial unique index on `events.email_msg_id` — an email is processed once
+  (the `digest_sent` index from 001 is now unused: the Telegram digest was replaced by
+  the `/review` pull queue, which needs no send-once guard. Left in place — migrations
+  are never edited after they run, and an unused index costs nothing.)
 
 ## Writing rules
 
