@@ -1,10 +1,18 @@
-"""Discovery: JobSpy -> normalize -> dedup -> `discovered`.
+"""Discovery: Indeed scrape and direct ATS board polls -> dedup -> `discovered`.
 
-One search sweep per run, driven entirely by `config/searches.yaml`. Everything
-that comes back is written as a `discovered` application. Nothing is filtered
-here — `score` runs the deterministic prefilter from `docs/profile/scoring.yaml`
-and this worker must not second-guess it, or a posting gets dropped in a place
-with no record that it ever existed.
+Two sources with opposite risk profiles, both driven by `config/searches.yaml`:
+
+  * JobSpy against Indeed. Works, and is one Cloudflare rule from not working.
+    The only source that can get us banned, so it is paced, jittered, and gives
+    up early when it starts being refused.
+  * `boards.py` against Greenhouse, Lever, and Ashby's public JSON. Documented
+    endpoints meant for machine reads, throttled per host.
+
+Scraped rows are written as they come: Indeed applies the search term
+server-side, so that source never returns a warehouse inspector. Board rows are
+filtered on title first — a board poll has no query and returns the whole
+company. See `poll_boards` for why that is not the `score` prefilter wearing a
+disguise. Everything that lands still goes through `score` in full.
 
 Idempotent by construction. `jobs.apply_url_norm` is UNIQUE, so a posting seen on
 the second run of the day inserts nothing and the row count says so. There is no
@@ -18,6 +26,7 @@ out, whether or not it happens to be my current one.
 from __future__ import annotations
 
 import argparse
+import random
 import sqlite3
 import sys
 import time
@@ -26,7 +35,7 @@ from typing import Any
 
 import yaml
 
-from . import config, queries, states
+from . import boards, config, queries, states
 from .db import connect
 from .normalize import UnparseableURL, detect_ats, normalize_apply_url
 
@@ -61,14 +70,24 @@ class Sweep:
     per_source: dict[str, int] = field(default_factory=dict)
     empty_searches: list[str] = field(default_factory=list)
     searches: int = 0
+    aborted_scrape: str | None = None
+    boards_polled: int = 0
+    board_failures: list[str] = field(default_factory=list)
+    filtered_by_title: int = 0
 
     def line(self) -> str:
         parts = [
             f"{self.searches} searches",
+            f"{self.boards_polled} boards",
             f"{self.found} found",
             f"{self.inserted} new",
             f"{self.duplicates} already tracked",
         ]
+        if self.filtered_by_title:
+            # Named, every run. This is the only place a posting is dropped
+            # without leaving a row, so the number has to be in front of me —
+            # a filter quietly widening is how the digest goes quiet.
+            parts.append(f"{self.filtered_by_title} boards rows failed the title rule")
         if self.incomplete:
             parts.append(f"{self.incomplete} skipped (missing title/company/url)")
         if self.unparseable:
@@ -217,6 +236,93 @@ def search(cfg: dict[str, Any], term: str, location: dict[str, Any]) -> list[dic
     return frame.to_dict("records")
 
 
+def title_filter() -> tuple[list[str], list[str]]:
+    """`(keywords, blocked)` from docs/profile/scoring.yaml, lowercased.
+
+    Read here rather than duplicated: scoring.yaml already defines what a title
+    has to contain, and having two lists to keep in step is how they diverge.
+    A missing or empty file disables the filter rather than dropping everything.
+    """
+    path = config.PROFILE_DIR / "scoring.yaml"
+    if not path.exists():
+        return [], []
+    try:
+        loaded = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise IngestError(f"scoring.yaml is not valid YAML: {exc}") from exc
+    keywords = [str(k).strip().lower() for k in (loaded.get("title_keywords") or [])]
+    blocked = [str(b).strip().lower() for b in (loaded.get("titles_block") or [])]
+    return [k for k in keywords if k], [b for b in blocked if b]
+
+
+def passes_title(title: str, keywords: list[str], blocked: list[str]) -> bool:
+    """scoring.yaml's rule: contains any keyword, and none of the blocked words."""
+    if not keywords:
+        return True
+    lowered = title.lower()
+    if any(word in lowered for word in blocked):
+        return False
+    return any(word in lowered for word in keywords)
+
+
+def poll_boards(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], int]:
+    """Every seeded ATS board. Returns `(rows, failures, filtered_out)`.
+
+    A dead board is expected, not exceptional — companies rename boards, get
+    acquired, and move ATS. One 404 must not cost the other fifty, so failures
+    are collected and reported rather than raised.
+
+    Titles are filtered here, and only here. This looks like the prefilter that
+    docs/build-plan.md assigns to `score`, and it is deliberately not the same
+    thing. The Indeed path sends `search_term="software engineer"`, which Indeed
+    applies server-side — so that source never returns a warehouse inspector in
+    the first place. A board poll has no query; it returns the entire company.
+    Polling SpaceX and Anduril unfiltered means thousands of manufacturing
+    technicians and mechanical engineers, which are not shots being discarded
+    on unreliable data — they are a different profession. Applying scoring.yaml's
+    own title rule here restores the symmetry the two sources would otherwise
+    lack, and `score` still runs the full prefilter over everything that lands.
+
+    Pacing lives in `boards._get`, which throttles per host rather than per run.
+    A single sleep here would pace the loop as a whole and still send nineteen
+    Ashby boards back to back.
+    """
+    seeds = cfg.get("boards") or {}
+    keywords, blocked = title_filter()
+    rows: list[dict[str, Any]] = []
+    failures: list[str] = []
+    filtered_out = 0
+
+    for vendor, slugs in seeds.items():
+        for slug in slugs or []:
+            try:
+                fetched = boards.fetch(vendor, str(slug))
+            except boards.RateLimited as exc:
+                # The vendor asked us to slow down and we already backed off and
+                # retried. Continuing through their remaining boards is how a
+                # throttle becomes a ban, and this source has to still work
+                # tomorrow. Abandon this vendor for the run; the rest are
+                # different hosts with their own budget.
+                remaining = [s for s in slugs if s != slug]
+                failures.append(
+                    f"{vendor}/{slug}: {exc} — skipped {len(remaining)} more "
+                    f"{vendor} board(s) this run rather than pushing harder"
+                )
+                break
+            except boards.BoardError as exc:
+                failures.append(f"{vendor}/{slug}: {exc}")
+                continue
+            for row in fetched:
+                title = _text(row.get("title"))
+                # No title is a malformed row, not a rejected one — let `store`
+                # count it as incomplete rather than hiding it in this total.
+                if title and not passes_title(title, keywords, blocked):
+                    filtered_out += 1
+                    continue
+                rows.append(row)
+    return rows, failures, filtered_out
+
+
 def store(conn: sqlite3.Connection, rows: list[dict[str, Any]], sweep: Sweep) -> None:
     """Write one search's results. Each posting is its own transaction.
 
@@ -241,7 +347,11 @@ def store(conn: sqlite3.Connection, rows: list[dict[str, Any]], sweep: Sweep) ->
             continue
 
         site = _text(row.get("site")) or "unknown"
-        source = f"jobspy:{site}"
+        # `jobs.source` distinguishes how a posting was found, which is the
+        # column the aggregator-staleness check reads. 001_init.sql names the
+        # convention: 'jobspy:indeed' for a scrape, 'greenhouse:direct' for the
+        # vendor's own API.
+        source = f"{site}:direct" if site in boards.FETCHERS else f"jobspy:{site}"
         ats_type, ats_slug = detect_ats(apply_url)
         interval = _text(row.get("interval"))
 
@@ -275,22 +385,65 @@ def store(conn: sqlite3.Connection, rows: list[dict[str, Any]], sweep: Sweep) ->
         sweep.per_source[source] = sweep.per_source.get(source, 0) + 1
 
 
-def run(conn: sqlite3.Connection, cfg: dict[str, Any] | None = None) -> Sweep:
-    """One full sweep: every term against every location."""
+def run(
+    conn: sqlite3.Connection,
+    cfg: dict[str, Any] | None = None,
+    *,
+    scrape: bool = True,
+    poll: bool = True,
+) -> Sweep:
+    """One full sweep: every term against every location, then every board.
+
+    Boards run second and deliberately so. Both sources reach the same
+    companies, and whichever inserts first owns the row — so a posting the
+    aggregator already has keeps `jobspy:indeed` as its source. That makes
+    `jobs.source` answer "would direct polling have found this on its own?",
+    which is the question worth asking while Indeed is the single point of
+    failure.
+    """
     cfg = cfg or load_config()
     sweep = Sweep()
-    delay = float(cfg.get("delay_seconds", 3))
-    pairs = [(term, loc) for term in cfg["terms"] for loc in cfg["locations"]]
 
-    for index, (term, location) in enumerate(pairs):
-        rows = search(cfg, term, location)
-        sweep.searches += 1
-        where = _text(location.get("city")) or "remote"
-        if not rows:
-            sweep.empty_searches.append(f"{term} / {where}")
+    if scrape:
+        delay = float(cfg.get("delay_seconds", 8))
+        pairs = [(term, loc) for term in cfg["terms"] for loc in cfg["locations"]]
+        consecutive_empty = 0
+        for index, (term, location) in enumerate(pairs):
+            rows = search(cfg, term, location)
+            sweep.searches += 1
+            where = _text(location.get("city")) or "remote"
+            if rows:
+                consecutive_empty = 0
+            else:
+                sweep.empty_searches.append(f"{term} / {where}")
+                consecutive_empty += 1
+            store(conn, rows, sweep)
+
+            # Indeed is a scrape, not an API, and it is the one source that can
+            # ban us. A run of empty results is what throttling looks like from
+            # this side — the scraper returns nothing rather than raising — so
+            # stop asking. Grinding through thirty more searches while being
+            # refused is how a soft throttle becomes a hard block, and this has
+            # to still work tomorrow.
+            if consecutive_empty >= 4:
+                sweep.aborted_scrape = (
+                    f"stopped after {sweep.searches} of {len(pairs)} searches: "
+                    f"{consecutive_empty} in a row came back empty, which is what "
+                    f"being throttled looks like"
+                )
+                break
+            if index < len(pairs) - 1:
+                # Jittered: a fixed interval is a fingerprint, and two runs a day
+                # at exactly 8.0s apart is a pattern worth not having.
+                time.sleep(delay + random.uniform(0, delay * 0.5))
+
+    if poll:
+        rows, failures, filtered = poll_boards(cfg)
+        seeds = cfg.get("boards") or {}
+        sweep.boards_polled = sum(len(slugs or []) for slugs in seeds.values())
+        sweep.board_failures = failures
+        sweep.filtered_by_title = filtered
         store(conn, rows, sweep)
-        if delay and index < len(pairs) - 1:
-            time.sleep(delay)
     return sweep
 
 
@@ -304,7 +457,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--limit", type=int, default=None, help="stop after N searches (for checking a change)"
     )
+    # Two sources with very different failure modes, so each can be run alone:
+    # the scrape is slow and breaks when a site changes, the boards are fast and
+    # break when a company renames one.
+    parser.add_argument("--boards-only", action="store_true", help="skip the Indeed scrape")
+    parser.add_argument("--scrape-only", action="store_true", help="skip the board poll")
     args = parser.parse_args(argv)
+    if args.boards_only and args.scrape_only:
+        print("--boards-only and --scrape-only are mutually exclusive", file=sys.stderr)
+        return 2
 
     try:
         cfg = load_config()
@@ -329,7 +490,9 @@ def main(argv: list[str] | None = None) -> int:
                         )
             print(f"dry run — {sweep.searches} searches, {sweep.found} postings, nothing written")
         else:
-            sweep = run(conn, cfg)
+            sweep = run(
+                conn, cfg, scrape=not args.boards_only, poll=not args.scrape_only
+            )
             print(sweep.line())
             for source, count in sorted(sweep.per_source.items()):
                 print(f"  {source}: {count}")
@@ -338,6 +501,18 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         conn.close()
+
+    # Loudest first: giving up mid-scrape means Indeed is refusing us, and that
+    # is the difference between a slow week and a dead source.
+    if sweep.aborted_scrape:
+        print(f"\nSCRAPE ABORTED — {sweep.aborted_scrape}", file=sys.stderr)
+        print(
+            "  Leave it alone for a few hours before rerunning. If it persists, "
+            "raise `delay_seconds` in config/searches.yaml, and lean on the board\n"
+            "  poll (`make ingest ARGS=--boards-only`) meanwhile — those are the "
+            "vendors' own APIs and are unaffected.",
+            file=sys.stderr,
+        )
 
     # A source that has quietly died returns zero rows rather than raising, which
     # is how discovery stops without anyone noticing. Say so every run.
@@ -350,6 +525,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {label}", file=sys.stderr)
         if len(sweep.empty_searches) > 10:
             print(f"  ... and {len(sweep.empty_searches) - 10} more", file=sys.stderr)
+
+    # A board 404s when a company renames it, migrates ATS, or is acquired. The
+    # seed list is hand-maintained, so it goes stale silently unless this says so.
+    if sweep.board_failures:
+        print(
+            f"\n{len(sweep.board_failures)} of {sweep.boards_polled} boards failed "
+            f"— prune or fix these in config/searches.yaml:",
+            file=sys.stderr,
+        )
+        for label in sweep.board_failures:
+            print(f"  - {label}", file=sys.stderr)
     return 0
 
 

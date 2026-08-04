@@ -61,6 +61,101 @@ locations:
   - {city: "Seattle, WA"}
   - {city: "Atlanta, GA"}
 
-# Indeed rate-limits. Seconds to wait between searches; raise it if runs start
-# coming back empty from a query that used to work.
-delay_seconds: 3
+# Seconds between Indeed searches, jittered by up to +50% so two runs a day are
+# not an identifiable metronome. This is the one source that can ban us — it is
+# a scrape, not an API — and 36 searches at 8s is five minutes for a job that
+# runs unattended twice a day. There is nothing to gain by going faster.
+#
+# Raise it if runs start coming back empty from queries that used to work. The
+# scraper reports throttling as zero rows rather than an error, so `ingest`
+# treats four consecutive empty searches as being refused and stops the sweep
+# rather than grinding through thirty more while blocked.
+delay_seconds: 8
+
+# ---------------------------------------------------------------------------
+# Direct ATS board polling — the second source, and the durable one.
+#
+# These are the vendors' own public JSON endpoints, meant to be read by other
+# software. No scraping, no bot detection, nothing to break when a page's markup
+# changes. Where a keyword search can miss a posting whose title used a word I
+# did not think of, a board poll returns the entire board — so filtering happens
+# in `score`, where it is reviewable, instead of silently at the query.
+#
+# The seed list below was not invented. Every slug was harvested from a real
+# Indeed sweep on 2026-08-03: 28 Greenhouse boards recovered by following
+# `grnh.se` short links (which carry the posting id, not the company), plus the
+# Lever and Ashby slugs that appeared directly in apply URLs. Add companies you
+# want to watch regardless of whether they ever show up on Indeed — that is the
+# real reason to keep this list by hand.
+#
+# A 404 is the ordinary way a board dies: renamed, migrated, or the company was
+# acquired. `make ingest` reports those per run rather than failing the sweep.
+# ---------------------------------------------------------------------------
+
+boards:
+  greenhouse:
+    - andurilindustries
+    - astranis
+    - axs
+    - colabsoftware
+    - drweng
+    - earnin
+    - flip
+    - goguardian
+    - idme
+    - impinjexternal
+    - incidentiq
+    - inversionspace
+    - kallesgroup
+    - mill
+    - mochihealth
+    - next-internal
+    - nextinsurance66
+    - onetrust
+    - quince
+    - scoutmotors
+    - sidecarhealth
+    - simplisafe
+    - smartsheet
+    - spacex
+    - speechify
+    - systemstechnologyresearch
+    - theweathercompany
+    - xai
+  lever:
+    - circadiahealth
+    - getcircuit
+    - greenlight
+    - ppro
+    - zoox
+  ashby:
+    - 1x
+    - artificialanalysis
+    - brainco
+    - clera
+    - cogent-security
+    - delinea
+    - epsilon-health
+    - etched
+    - evenup
+    - hawkeyeinnovations
+    - illumio
+    - mach
+    - nightfall-ai
+    - nubank
+    - pariveda
+    - plaud
+    - rula
+    - spoton
+    - veho-tech-inc
+
+# Board pacing is NOT set here. It lives in `boards._MIN_INTERVAL`, keyed by
+# host, because a single number here would pace the loop rather than any one
+# vendor — nineteen Ashby boards in a row would still arrive back to back.
+#
+# Current policy, per host: 1 request/second with jitter, 3 attempts, honouring
+# Retry-After, retrying only 429/5xx and never a 404. Ashby's unauthenticated
+# posting API has an unofficial ceiling near 100/min and Greenhouse documents
+# none — which is not permission — so 60/min per host is an order of magnitude
+# under anything published. A 429 abandons that vendor for the rest of the run
+# instead of pushing harder; the source has to still work tomorrow.
