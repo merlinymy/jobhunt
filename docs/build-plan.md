@@ -149,7 +149,18 @@ rather than silently dropped.
       abandons that vendor for the run). This is the durable source — vendors' own JSON,
       no markup to rot.
 - [x] URL normalization + hard dedup. Soft dedup is **not** done — see below.
-- [ ] `contacts` seeded from `docs/profile/contacts.csv` (LinkedIn export + hand additions)
+- [x] `contacts` seeded from the LinkedIn export + hand additions. Loaded by
+      `make load-profile`, which reads both `Connections.csv` (LinkedIn's own filename)
+      and `contacts.csv` (the hand-written schema, which carries `relationship` and
+      `do_not_contact` — the two things LinkedIn cannot supply). 345 rows → 246 contacts,
+      99 skipped where LinkedIn withholds the name, 211 companies created.
+
+      **Only 1 of 59 seeded boards is a company where a contact works.** A referral is
+      the biggest single lever on interview rate, so that number is worth raising — but
+      not automatically: probing guessed Greenhouse/Lever/Ashby slugs for the 14
+      best-connected companies found **zero** public boards, so the network sits at
+      companies that either do not use those three or are not hiring publicly. Adding
+      board slugs by hand for companies you actually know someone at is the move.
 - [x] Pass 1 deterministic prefilter driven by `docs/profile/scoring.yaml` — `prefilter.py`.
       4,982 real rows → 3,510 in 1.9s. Every check fails open; each rejection records the
       rule that fired in its `events` row.
