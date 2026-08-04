@@ -293,10 +293,146 @@ def ashby(slug: str) -> list[dict[str, Any]]:
     return rows
 
 
+# ============================== smartrecruiters ==============================
+
+
+def smartrecruiters(slug: str) -> list[dict[str, Any]]:
+    """Paginated, unlike the other three — 100 per page, `totalFound` up front.
+
+    The list endpoint omits the JD. Fetching it costs one request per posting,
+    which for a 500-req board is worse than the whole rest of the poll combined,
+    so it is left out: `score` reads the title and location, and `tailor` only
+    ever sees a JD I paste or a packet builds. Revisit if Phase 3 needs it.
+    """
+    rows: list[dict[str, Any]] = []
+    offset, limit = 0, 100
+    while True:
+        payload = _get(
+            f"https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+            f"?limit={limit}&offset={offset}"
+        )
+        page = payload.get("content") if isinstance(payload, dict) else None
+        if page is None:
+            raise BoardError(f"smartrecruiters/{slug}: no `content` array")
+        for job in page:
+            location = job.get("location") or {}
+            city = location.get("city")
+            region = location.get("region")
+            where = ", ".join(part for part in (city, region) if part)
+            rows.append(
+                _row(
+                    title=job.get("name"),
+                    company=(job.get("company") or {}).get("name") or slug,
+                    apply_url=f"https://jobs.smartrecruiters.com/{slug}/{job.get('id')}",
+                    site="smartrecruiters",
+                    location=where or None,
+                    date_posted=_iso(job.get("releasedDate")),
+                    is_remote=bool(location.get("remote")),
+                )
+            )
+        offset += limit
+        total = payload.get("totalFound") or 0
+        # Bounded on purpose: a board with 10,000 postings is an agency, and
+        # walking it is 100 requests against a host we are being polite to.
+        if offset >= total or offset >= 500:
+            break
+    return rows
+
+
+# ================================== rippling ==================================
+
+
+def rippling(slug: str) -> list[dict[str, Any]]:
+    """Thin payload — name, department, location, url. No JD, no dates."""
+    postings = _get(f"https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs")
+    if not isinstance(postings, list):
+        raise BoardError(f"rippling/{slug}: expected a list of postings")
+    rows = []
+    for job in postings:
+        where = job.get("workLocation") or {}
+        label = where.get("label") if isinstance(where, dict) else str(where)
+        rows.append(
+            _row(
+                title=job.get("name"),
+                company=slug,
+                apply_url=job.get("url"),
+                site="rippling",
+                location=label,
+                is_remote="remote" in (label or "").lower(),
+            )
+        )
+    return rows
+
+
+# ================================== workable ==================================
+
+
+def workable(slug: str) -> list[dict[str, Any]]:
+    payload = _get(
+        f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
+    )
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
+    if jobs is None:
+        raise BoardError(f"workable/{slug}: no `jobs` array")
+    company = payload.get("name") or slug
+    rows = []
+    for job in jobs:
+        rows.append(
+            _row(
+                title=job.get("title"),
+                company=company,
+                apply_url=job.get("application_url") or job.get("url") or job.get("shortlink"),
+                site="workable",
+                location=job.get("location") or job.get("city"),
+                description=job.get("description"),
+                date_posted=_iso(job.get("published_on") or job.get("created_at")),
+                is_remote=bool(job.get("telecommuting")),
+            )
+        )
+    return rows
+
+
+# ================================== bamboohr ==================================
+
+
+def bamboohr(slug: str) -> list[dict[str, Any]]:
+    payload = _get(f"https://{slug}.bamboohr.com/careers/list")
+    jobs = payload.get("result") if isinstance(payload, dict) else None
+    if jobs is None:
+        raise BoardError(f"bamboohr/{slug}: no `result` array")
+    rows = []
+    for job in jobs:
+        location = job.get("location") or {}
+        where = (
+            ", ".join(
+                str(part)
+                for part in (location.get("city"), location.get("state"))
+                if part
+            )
+            if isinstance(location, dict)
+            else str(location)
+        )
+        rows.append(
+            _row(
+                title=job.get("jobOpeningName"),
+                company=slug,
+                apply_url=f"https://{slug}.bamboohr.com/careers/{job.get('id')}",
+                site="bamboohr",
+                location=where or job.get("atsLocation") or None,
+                is_remote=bool(job.get("isRemote")),
+            )
+        )
+    return rows
+
+
 FETCHERS: dict[str, Callable[[str], list[dict[str, Any]]]] = {
     "greenhouse": greenhouse,
     "lever": lever,
     "ashby": ashby,
+    "smartrecruiters": smartrecruiters,
+    "rippling": rippling,
+    "workable": workable,
+    "bamboohr": bamboohr,
 }
 
 

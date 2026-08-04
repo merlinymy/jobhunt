@@ -137,7 +137,6 @@ boards:
     - delinea
     - epsilon-health
     - etched
-    - evenup
     - hawkeyeinnovations
     - illumio
     - mach
@@ -148,6 +147,27 @@ boards:
     - rula
     - spoton
     - veho-tech-inc
+  # Four more vendors, all verified against a live board. SmartRecruiters is
+  # paginated and capped at 500 postings per company in boards.py — past that a
+  # "company" is a staffing agency. Rippling and BambooHR return no JD and no
+  # dates, so those rows arrive title-and-location only; that is enough for the
+  # title rule and for `score`, and better than not seeing the posting.
+  smartrecruiters:
+    - ServiceNow
+  rippling:
+    - huntridge-labs-careers
+    - lynx-software-technologies
+    - opiniion
+    - safire
+  bamboohr:
+    - dockyard
+    - elyoninternational
+    - softerware
+  # Workable's board API keys on an account slug, and Indeed only ever returns
+  # its job-level short links (`apply.workable.com/j/<id>`), which carry no
+  # account. The fetcher is verified and ready; this list needs slugs added by
+  # hand from a company's own careers page.
+  workable: []
 
 # Board pacing is NOT set here. It lives in `boards._MIN_INTERVAL`, keyed by
 # host, because a single number here would pace the loop rather than any one
