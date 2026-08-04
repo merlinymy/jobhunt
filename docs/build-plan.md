@@ -133,8 +133,16 @@ rather than silently dropped.
 
 ## Phase 4 — discovery, scoring, digest
 
-- [ ] JobSpy ingest (Indeed + Google only to start)
-- [ ] URL normalization + hard and soft dedup
+- [x] JobSpy ingest — **Indeed only. Google is dead.** Measured 2026-08-03 against
+      python-jobspy 1.1.82: of the four US sources it exposes, `indeed` returned rows and
+      `google`, `zip_recruiter` and `glassdoor` each returned zero on every phrasing tried.
+      Google fails with "initial cursor not found". So discovery has one source, which is a
+      single point of failure — if Indeed follows, CLAUDE.md's "Aggregator staleness" note
+      (polling Greenhouse/Lever/Ashby JSON for a seeded company list) stops being optional.
+      `make ingest` prints the count of searches that returned nothing, every run, so a
+      source dying quietly is visible rather than looking like a slow week.
+      Verified end to end: 36 searches, 1210 postings, 528 new, rerun inserted 0.
+- [x] URL normalization + hard dedup. Soft dedup is **not** done — see below.
 - [ ] `contacts` seeded from `docs/profile/contacts.csv` (LinkedIn export + hand additions)
 - [ ] Pass 1 deterministic prefilter driven by `docs/profile/scoring.yaml`
 - [ ] Pass 2 LLM scoring via Batch API, model from `config/models.yaml`
@@ -143,6 +151,27 @@ rather than silently dropped.
 
 **Gate:** 8 jobs arrive in Telegram each weekday morning and ≥50% get
 `would_apply_anyway = 1`. Below that, tune the prefilter — not the LLM.
+
+### Open — soft dedup
+
+Hard dedup works: `apply_url_norm` is UNIQUE and a rerun of the full sweep inserted zero.
+Within one sweep it caught 638 repeats out of 1210. What it cannot catch is one posting
+reachable by two different URLs, and a real sweep produced three shapes of that:
+
+- **Aggregator redirect wrappers**, 29 of 553. `click.appcast.io`, `jsv3.recruitics.com`,
+  `rr.jobsyn.org`, `dsp.prng.co`, `tnl2.jometer.com` — the real URL is behind an opaque
+  token, so the same job reached directly gets a second row. `normalize.is_redirect_wrapper`
+  identifies them but nothing acts on it yet. Recruitics is the one worth unwrapping: it
+  carries the destination in its own `rx_url` query param.
+- **Same job, cosmetically different paths.** `capgemini.com/jobs/525995-en_US+sap_btp` and
+  `.../525995-en_US_SAPBTP/`; `careers.oxfordeconomics.com/en/postings/<uuid>` and the same
+  UUID without the `/en/`.
+- **Indeed fallback.** 18 of 553 had no `job_url_direct`, so the key is an `indeed.com/job/`
+  URL. If the same posting later arrives with its ATS URL, that is two rows.
+
+Cheapest useful version is a soft key on `(company_id, title_norm)` surfaced as a warning
+rather than a merge — deciding which of two rows survives is a judgement call, and the whole
+point of `apply_url_norm` being a constraint is that nothing silently discards a shot.
 
 ## Phase 5 — inbox poller
 
