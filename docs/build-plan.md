@@ -121,15 +121,21 @@ Fixture count is 55, up from 48; all 102 corpus bullets still validate verbatim.
 
 ## Phase 3 — answer bank and chat intake
 
-- [ ] `answers` populated for every field observed in Phase 0
-- [ ] `docs/profile/stories.md` written (intake sections E, F), loaded into `stories`
-- [ ] `chat` worker: walks intake sections, writes to DB, appends new answers
-- [ ] Answer resolution chain (company override → global → generate → unknown)
-- [~] Packet view. `/packet/{id}` exists: apply link, tailored PDF served from the stored
-      bytes, diff against master, referral flag, "I applied". Structured fields (identity,
-      work history, projects, education) are on `/fill` with copy buttons. **What is missing
-      is the free-text answer set** — the narrative questions — which needs the answer bank.
-- [ ] Unknown questions land in `unknown_questions` and flag on the packet
+- [x] `answers` populated. `jobhunt/answers.py` holds the catalogue and the resolution
+      chain; `make load-profile` writes the global facts from `facts.yaml`.
+- [~] `stories.md` loader written and idempotent (008 gives `stories` a natural key).
+      **The file is still the empty template** — nothing to load until it is filled.
+- [ ] `chat` worker: walks intake sections, writes to DB, appends new answers.
+      The one Phase 3 item left. `unknown_questions.seen_count` is what it would walk.
+- [x] Answer resolution chain: company override → global → generate if narrative →
+      otherwise record in `unknown_questions`. A fact is never generated, enforced in
+      `answers.generate` and again at the route.
+- [x] Packet view. `/packet/{id}`: apply link, tailored PDF served from the stored bytes,
+      diff against master, referral flag, the full answer set with copy buttons, and
+      "I applied". Structured fields are on `/fill`.
+- [x] Unknown questions land in `unknown_questions` with a `seen_count` and flag on the
+      packet. Facts `facts.yaml` deliberately leaves blank (`visa_note`, `clearance`) are
+      marked optional and excluded, so the counter shows real gaps rather than noise.
 
 **Gate:** A packet renders a complete answer set, and a question I've never seen gets captured
 rather than silently dropped.

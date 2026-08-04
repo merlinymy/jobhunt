@@ -455,3 +455,23 @@ button.skip { background: transparent; border: 1px solid light-dark(#ccc, #444);
 .review-card.decided.approved { border-color: light-dark(#86efac, #2f6f45); }
 form.inline { display: flex; gap: .5rem; align-items: center; margin: .6rem 0 1rem; }
 form.inline input { width: 5rem; }
+
+/* ---- packet answers ----------------------------------------------------- */
+table.answers th { width: 19rem; }
+table.answers tr.missing th { color: light-dark(#b45309, #fbbf24); }
+table.answers .hint { font-weight: 400; font-size: .78rem; margin-top: .15rem; }
+.tag {
+  display: inline-block; font-size: .7rem; font-weight: 500; padding: .05rem .35rem;
+  border-radius: 4px; margin-left: .35rem; vertical-align: middle;
+  background: light-dark(#e0e7ff, #23304d); color: light-dark(#3730a3, #a5b4fc);
+}
+.tag.gen { background: light-dark(#fce7f3, #3a1f30); color: light-dark(#9d174d, #f9a8d4); }
+form.inline-form { display: inline; margin-left: .4rem; }
+button.quiet-btn {
+  font: inherit; font-size: .78rem; cursor: pointer; padding: .1rem .4rem;
+  background: transparent; border: 1px solid light-dark(#ddd, #383838);
+  border-radius: 4px; color: light-dark(#666, #999);
+}
+table.answers .copyable { max-width: 46rem; white-space: pre-wrap; }
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }

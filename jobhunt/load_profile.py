@@ -22,6 +22,7 @@ import argparse
 import csv
 import io
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -250,6 +251,86 @@ def _load_contacts(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> dict
     return counts
 
 
+# =============================== answers & stories ===============================
+
+
+def _load_fact_answers(conn: sqlite3.Connection, facts: dict[str, Any]) -> int:
+    """`facts.yaml` -> global fact-tier `answers` rows, returned verbatim forever.
+
+    The catalogue in `answers.py` says which facts.yaml key backs which question;
+    this walks it rather than duplicating the mapping. A blank value is skipped,
+    not written as an empty answer — `clearance: ""` means "does not apply", and
+    an empty string in the bank would render as an answered question with
+    nothing in it.
+    """
+    from . import answers as bank
+
+    written = 0
+    for question in bank.QUESTIONS:
+        if question.tier != bank.FACT or not question.facts_path:
+            continue
+        node: Any = facts
+        for part in question.facts_path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        if _blank(node):
+            continue
+        value = ", ".join(str(item) for item in node) if isinstance(node, list) else str(node)
+        bank.put(conn, question.key, question.text, value.strip(),
+                 tier=bank.FACT, source="user")
+        written += 1
+    return written
+
+
+# `stories.md` is prose on purpose — forcing a STAR story into YAML makes you
+# write a worse story. So it is parsed rather than loaded: `### Title` opens one,
+# `**Tags:**` and `**Role:**` are metadata, and the three bold headings are the
+# body. Anything that does not parse is skipped rather than guessed at.
+_STORY_HEADING = re.compile(r"^###\s+(?!\[)(.+?)\s*$", re.M)
+_STORY_FIELD = re.compile(r"\*\*(Situation|Action|Result|Tags|Role)\.?\*\*[:\s]*", re.I)
+
+
+def _parse_stories(text: str) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    matches = list(_STORY_HEADING.finditer(text))
+    for index, match in enumerate(matches):
+        title = match.group(1).strip()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        body = text[match.end():end]
+        parts = _STORY_FIELD.split(body)
+        fields: dict[str, str] = {}
+        for i in range(1, len(parts) - 1, 2):
+            fields[parts[i].lower()] = parts[i + 1].strip().strip("-").strip()
+        # A story with no result is an anecdote, as stories.md itself says. The
+        # template's own placeholder headings parse to empty and are dropped.
+        if not (fields.get("situation") and fields.get("action") and fields.get("result")):
+            continue
+        tags = [t.strip() for t in re.split(r"[|,]", fields.get("tags", "")) if t.strip()]
+        sections.append({
+            "title": title, "situation": fields["situation"],
+            "action": fields["action"], "result": fields["result"],
+            "tags": json.dumps(tags) if tags else None,
+        })
+    return sections
+
+
+def _load_stories(conn: sqlite3.Connection, path: Path) -> int:
+    if not path.exists():
+        return 0
+    stories = _parse_stories(path.read_text())
+    for story in stories:
+        conn.execute(
+            """
+            INSERT INTO stories (title, situation, action, result, tags, created_at)
+            VALUES (:title, :situation, :action, :result, :tags, :created_at)
+            ON CONFLICT (title) DO UPDATE SET
+              situation = excluded.situation, action = excluded.action,
+              result = excluded.result, tags = COALESCE(excluded.tags, tags)
+            """,
+            {**story, "created_at": config.utcnow()},
+        )
+    return len(stories)
+
+
 # ================================= flattening =================================
 
 
@@ -387,7 +468,7 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
     flat_facts = _flatten_facts(facts)
     counts = dict.fromkeys(
         ("facts", "experiences", "projects", "bullets", "education", "credentials",
-         "languages", "contacts", "pruned"),
+         "languages", "contacts", "answers", "stories", "pruned"),
         0,
     )
     now = config.utcnow()
@@ -545,6 +626,9 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
             )
         counts["languages"] = len(seen_languages)
 
+        counts["answers"] = _load_fact_answers(conn, facts)
+        counts["stories"] = _load_stories(conn, profile_dir / "stories.md")
+
         contact_rows = _contact_rows(profile_dir)
         if contact_rows:
             contact_counts = _load_contacts(conn, contact_rows)
@@ -632,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Counts only. Employer names stay out of log output.
     order = ("facts", "experiences", "projects", "bullets", "education", "credentials",
-             "languages", "contacts")
+             "languages", "contacts", "answers", "stories")
     print(" · ".join(f"{counts[name]} {name}" for name in order))
     # Worth seeing: LinkedIn withholds the name on a sizeable share of an export
     # (a closed or restricted account), and a contact with no name can never be

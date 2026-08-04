@@ -15,6 +15,9 @@
 
 <div id="packet-body">{% include "_packet_body.html" %}</div>
 
+<h2>Answers</h2>
+<div id="packet-answers">{% include "_packet_answers.html" %}</div>
+
 <h2>Fill</h2>
 <p class="muted">
   Try the portal's <strong>“autofill with resume”</strong> first — the PDF parses cleanly and
@@ -29,4 +32,29 @@
   <button type="submit" {% if app.state != 'packet_ready' %}disabled{% endif %}>I applied</button>
 </form>
 <div id="packet-state"></div>
+
+{# Same clipboard handler as the fill helper. Delegated from body, so it keeps
+   working on answers swapped in by HTMX after load. #}
+<script>
+  (function () {
+    function flash(el, text) {
+      var was = el.textContent; el.textContent = text; el.classList.add('copied');
+      setTimeout(function () { el.textContent = was; el.classList.remove('copied'); }, 900);
+    }
+    function fallback(v) {
+      var ta = document.createElement('textarea');
+      ta.value = v; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+    }
+    document.body.addEventListener('click', function (e) {
+      var el = e.target.closest('.copyable'); if (!el) return;
+      var v = el.getAttribute('data-copy');
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(v).then(function(){flash(el,'copied');},
+                                              function(){fallback(v);flash(el,'copied');});
+      } else { fallback(v); flash(el,'copied'); }
+    });
+  })();
+</script>
 {% endblock %}

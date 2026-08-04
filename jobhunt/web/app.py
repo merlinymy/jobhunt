@@ -28,7 +28,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import config, db, llm, prefilter, queries, resume, states, tailor
+from .. import answers, config, db, llm, prefilter, queries, resume, states, tailor
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 
 HERE = Path(__file__).resolve().parent
@@ -748,8 +748,15 @@ def _packet_context(conn: sqlite3.Connection, application_id: int) -> dict[str, 
 
 @app.get("/packet/{application_id}", response_class=HTMLResponse)
 def packet(request: Request, conn: Conn, application_id: int) -> Response:
+    context = _packet_context(conn, application_id)
+    extra = _answers_context(conn, application_id)
+    # Record the gaps on every view, not only on build: the count is what tells
+    # me a question belongs in facts.yaml, and I see the packet more often than
+    # I build one.
+    answers.flag_unknowns(conn, extra["answers"], application_id)
     return templates.TemplateResponse(
-        request, "packet.html", _packet_context(conn, application_id)
+        request, "packet.html",
+        {**context, "answers": extra["answers"], "unknowns": extra["unknowns"]},
     )
 
 
@@ -773,6 +780,85 @@ def packet_build(request: Request, conn: Conn, application_id: int) -> Response:
     context = _packet_context(conn, application_id)
     context["error"] = error
     return templates.TemplateResponse(request, "_packet_body.html", context)
+
+
+def _answers_context(
+    conn: sqlite3.Connection, application_id: int
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT j.company_id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.id = ?",
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such application")
+    company_id = int(row["company_id"])
+    resolved = answers.resolve_all(conn, company_id)
+    return {
+        "app": {"id": application_id},
+        "answers": resolved,
+        "company_id": company_id,
+        "unknowns": conn.execute(
+            "SELECT COUNT(*) AS n FROM unknown_questions"
+        ).fetchone()["n"],
+    }
+
+
+@app.post("/packet/{application_id}/answers/{key}/generate", response_class=HTMLResponse)
+def packet_generate_answer(
+    request: Request, conn: Conn, application_id: int, key: str
+) -> Response:
+    """Draft one narrative answer and cache it against the company."""
+    question = answers.BY_KEY.get(key)
+    if question is None:
+        raise HTTPException(404, f"no question {key!r}")
+    row = conn.execute(
+        """
+        SELECT j.company_id, j.title, j.jd_text, c.name AS company
+          FROM applications a JOIN jobs j ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.id = ?
+        """,
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such application")
+    try:
+        answers.generate(
+            conn, question, company=row["company"], title=row["title"],
+            jd_text=row["jd_text"], company_id=int(row["company_id"]),
+            application_id=application_id,
+        )
+    except (answers.AnswerError, llm.LLMError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return templates.TemplateResponse(
+        request, "_packet_answers.html", _answers_context(conn, application_id)
+    )
+
+
+@app.post("/packet/{application_id}/answers/{key}/set", response_class=HTMLResponse)
+def packet_set_answer(
+    request: Request, conn: Conn, application_id: int, key: str,
+    answer: Annotated[str, Form()],
+) -> Response:
+    """Store a per-company fact I typed — salary, and nothing else so far.
+
+    Fact tier and `source = 'user'`, so it is returned verbatim to every later
+    application to this employer. That is the point: quoting one company two
+    different numbers is the failure this prevents.
+    """
+    question = answers.BY_KEY.get(key)
+    if question is None:
+        raise HTTPException(404, f"no question {key!r}")
+    if question.tier != answers.FACT:
+        raise HTTPException(422, f"{key!r} is narrative-tier; draft it instead")
+    if not answer.strip():
+        raise HTTPException(422, "an empty answer is not an answer")
+    context = _answers_context(conn, application_id)
+    answers.put(conn, question.key, question.text, answer.strip(),
+                tier=answers.FACT, source="user", company_id=context["company_id"])
+    return templates.TemplateResponse(
+        request, "_packet_answers.html", _answers_context(conn, application_id)
+    )
 
 
 @app.get("/packet/{application_id}/resume.pdf")
