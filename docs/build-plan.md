@@ -85,29 +85,30 @@ Still open, both corpus data rather than renderer bugs:
 - It is also the only project with a `url`, so its name renders bold **and** underlined while
   the others are bold alone. Either give the others URLs or drop this one.
 
-And one open question: `cv-builder` puts Skills second, right below the header. `build_cv`
-currently emits it last. Section order there is insertion order, not a chosen one.
+Section order is now an explicit list rather than insertion order, with skills leading, as in
+`cv-builder`.
 
 ### Open — validator holes found auditing this phase
 
 Each was reproduced against the real corpus. None is caught today.
 
-1. **A number glued to letters can be changed silently.** `_STANDALONE_NUMBER`'s
-   `(?<![A-Za-z0-9])` lookbehind stops `p99` reading as a bare `9`, but it makes the whole
-   token invisible rather than comparing it. Confirmed: `v1` → `v4` accepted on bullet 68.
-   Also exposed — `Y537S` (the ERα crystal structure), `BM25`, `base64`, `mulberry32`.
-   Fix: extract `[A-Za-z]+\d+[A-Za-z0-9]*` from the output and require each in
-   `haystack + noun_context[bid]`, the same allowance the proper-noun check uses.
+1. ~~**A number glued to letters can be changed silently.**~~ **Fixed 2026-08-03.** Glued
+   tokens are now compared whole, against the bullet's own row rather than the widened
+   context the name checks use — a digit inside a name is still a number, and rule 2 pins
+   numbers to their own bullet. That distinction decided the real case: a tech list holding
+   `Tailwind CSS v4` was enough to license rewording `since the v1 launch` into `v4`.
 2. **Lowercase invented proper nouns pass.** `at stripe`, `using terraform` — accepted. The
    tradeoff is deliberate (checking every lowercase word would flag ordinary prose), but it
-   means "invented employer", a required reject, only holds when capitalized.
+   means "invented employer", a required reject, only holds when capitalized. **Open — this
+   is a design call, not a bug.**
 3. **A plain merge of two bullets under one id passes** unless it drags across a number, a
-   proper noun, or a scope word. The system prompt forbids merging outright.
-4. **Non-ASCII homoglyphs are invisible.** `_WORD` is `[A-Za-z]`-anchored, so `Ѕtripe` with a
-   Cyrillic Ѕ tokenizes as lowercase `tripe` and is skipped. The JD is untrusted text and it
-   goes into the prompt.
+   proper noun, or a scope word. The system prompt forbids merging outright. A content-overlap
+   check would catch it but risks rejecting heavy legitimate rewording. **Open — design call.**
+4. ~~**Non-ASCII homoglyphs are invisible.**~~ **Fixed 2026-08-03.** A non-ASCII letter the
+   source never uses is now rejected. Not an ASCII-only rule — `ERα` is in the corpus, so the
+   test is whether the source uses that character at all.
 
-1 and 4 are contained fixes. 2 and 3 are design calls.
+Fixture count is 55, up from 48; all 102 corpus bullets still validate verbatim.
 
 ### Also noted
 
