@@ -304,11 +304,20 @@ def _numbers(text: str, *, standalone_only: bool = False) -> list[str]:
 
 
 def _spelled_numbers(text: str) -> set[str]:
-    """Number words, as their digit form, so `forty` and `40` compare equal."""
+    """Number words, as their digit form, so `forty` and `40` compare equal.
+
+    The `rstrip(".")` is load-bearing and was missing. `_WORD` allows `.` inside
+    a token on purpose, so `U.S.` survives — which also means a sentence ending
+    in a spelled number tokenizes as `seven.`, that misses `_NUMBER_WORDS`, and
+    the number never enters the allowed set. A real bullet ending "...and
+    faithfulness at sixty-seven." therefore rejected its own near-verbatim
+    rewording for inventing a `7`. `_unsourced_proper_nouns` already strips it;
+    this did not.
+    """
     return {
-        _NUMBER_WORDS[word.lower()]
+        _NUMBER_WORDS[cleaned]
         for word in _WORD.findall(text)
-        if word.lower() in _NUMBER_WORDS
+        if (cleaned := word.lower().rstrip(".")) in _NUMBER_WORDS
     }
 
 

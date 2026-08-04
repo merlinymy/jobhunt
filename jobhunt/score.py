@@ -244,24 +244,33 @@ def score_batch(
         system[0]["cache_control"] = {"type": "ephemeral"}
     system.append({"type": "text", "text": _SYSTEM})
 
+    # Kept so results can be logged with the prompt that produced them.
+    # `llm_calls.prompt` is NOT NULL, and CLAUDE.md asks for the prompt on every
+    # call — the first live batch died here passing None.
+    prompts = {f"app-{int(row['application_id'])}": _posting_prompt(row) for row in rows}
     requests = [
         {
-            "custom_id": f"app-{int(row['application_id'])}",
+            "custom_id": custom_id,
             "params": {
                 "model": model,
                 "max_tokens": int(settings.get("max_tokens", 200)),
                 "system": system,
-                "messages": [{"role": "user", "content": _posting_prompt(row)}],
+                "messages": [{"role": "user", "content": prompt}],
             },
         }
-        for row in rows
+        for custom_id, prompt in prompts.items()
     ]
 
     client = anthropic.Anthropic()
     batch = client.messages.batches.create(requests=requests)
+    # Printed before anything can go wrong with it. A batch is already paid for
+    # once submitted, and results stay retrievable for 29 days — so this id is
+    # what turns a crash or a timeout into `--batch-id <id>` instead of paying
+    # a second time. The first live run needed exactly this.
     print(f"  submitted batch {batch.id} — {len(requests)} postings", file=sys.stderr)
     if not wait:
-        print("  --no-wait: results are not applied. Rerun to pick them up.", file=sys.stderr)
+        print(f"  --no-wait: rerun with --batch-id {batch.id} to apply the results.",
+              file=sys.stderr)
         return {"submitted": len(requests), "scored": 0, "failed": 0}
 
     deadline = time.monotonic() + BATCH_MAX_WAIT
@@ -275,12 +284,38 @@ def score_batch(
             # slow has already missed the digest it was for.
             raise ScoreError(
                 f"batch {batch.id} still running after {BATCH_MAX_WAIT // 60} minutes. "
-                f"The postings are untouched; rerun `make score` later."
+                f"It is already paid for and results keep for 29 days — apply them "
+                f"later with:  make score ARGS='--batch-id {batch.id}'"
             )
         time.sleep(BATCH_POLL_SECONDS)
 
-    counts = {"submitted": len(requests), "scored": 0, "failed": 0}
-    for entry in client.messages.batches.results(batch.id):
+    return apply_batch(conn, batch.id, model=model, prompts=prompts,
+                       submitted=len(requests))
+
+
+def apply_batch(
+    conn: sqlite3.Connection,
+    batch_id: str,
+    *,
+    model: str | None = None,
+    prompts: dict[str, str] | None = None,
+    submitted: int | None = None,
+) -> dict[str, int]:
+    """Apply the results of an already-submitted batch.
+
+    Split out so a crash, a timeout, or `--no-wait` does not waste a batch that
+    has already been paid for. Idempotent by way of the state machine: a row
+    already moved out of `discovered` raises InvalidTransition and is counted as
+    skipped rather than scored twice.
+    """
+    import anthropic
+
+    client = anthropic.Anthropic()
+    prompts = prompts or {}
+    model = model or llm.task_config("score")["model"]
+
+    counts = {"submitted": submitted or 0, "scored": 0, "failed": 0, "already": 0}
+    for entry in client.messages.batches.results(batch_id):
         application_id = int(str(entry.custom_id).removeprefix("app-"))
         if entry.result.type != "succeeded":
             counts["failed"] += 1
@@ -294,14 +329,22 @@ def score_batch(
             # stays `discovered` and gets another go next time.
             counts["failed"] += 1
             continue
-        apply_score(conn, Scored(application_id, score, reason))
+        try:
+            apply_score(conn, Scored(application_id, score, reason))
+        except states.InvalidTransition:
+            # Already scored — a re-applied batch, or the row moved on. Not an
+            # error, and re-scoring it would overwrite a decision I may have made.
+            counts["already"] += 1
+            continue
         counts["scored"] += 1
-        _log_batch_call(conn, model, application_id, message)
+        _log_batch_call(conn, model, application_id, message,
+                        prompts.get(str(entry.custom_id), ""))
     return counts
 
 
 def _log_batch_call(
-    conn: sqlite3.Connection, model: str, application_id: int, message: Any
+    conn: sqlite3.Connection, model: str, application_id: int, message: Any,
+    prompt: str = "",
 ) -> None:
     """`llm_calls` row per batch result. CLAUDE.md wants every call logged.
 
@@ -316,11 +359,15 @@ def _log_batch_call(
             INSERT INTO llm_calls (task, model, application_id, prompt, response,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                 cost_usd, latency_ms, error, stop_reason, called_at)
-            VALUES ('score', ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+            VALUES ('score', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
             """,
             (
                 model,
                 application_id,
+                # NOT NULL. Empty string when a batch is re-applied from its id
+                # and the prompts are no longer in memory — honest about what is
+                # known rather than a crash or a fabricated reconstruction.
+                prompt,
                 "".join(p.text for p in message.content if p.type == "text")[:2000],
                 (getattr(usage, "input_tokens", 0) or 0)
                 + (getattr(usage, "cache_read_input_tokens", 0) or 0)
@@ -408,6 +455,10 @@ def main(argv: list[str] | None = None) -> int:
         help="submit the batch and exit without polling for results",
     )
     parser.add_argument(
+        "--batch-id", default=None,
+        help="apply the results of an already-submitted batch instead of creating one",
+    )
+    parser.add_argument(
         "--prefilter-only", action="store_true",
         help="run pass 1 and stop — deterministic, free, and the usual thing to check first",
     )
@@ -415,7 +466,9 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = connect()
     try:
-        if args.prefilter_only:
+        if args.batch_id:
+            counts = apply_batch(conn, args.batch_id)
+        elif args.prefilter_only:
             counts = prefilter.run(conn, limit=args.limit)
         else:
             counts = run(

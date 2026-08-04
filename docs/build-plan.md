@@ -208,9 +208,17 @@ reachable by two different URLs, and a real sweep produced three shapes of that:
 - **Indeed fallback.** 18 of 553 had no `job_url_direct`, so the key is an `indeed.com/job/`
   URL. If the same posting later arrives with its ATS URL, that is two rows.
 
-Cheapest useful version is a soft key on `(company_id, title_norm)` surfaced as a warning
-rather than a merge — deciding which of two rows survives is a judgement call, and the whole
-point of `apply_url_norm` being a constraint is that nothing silently discards a shot.
+**Measured on a real run, 2026-08-04, and it is worse than the redirect-wrapper case:**
+one company listing a role in nine cities is nine rows, nine scoring calls, and nine slots in
+a review queue that only shows eight. Of 661 scored rows, 160 were redundant — **24% of the
+queue** — and six of the first eight cards were the same Clera founding-engineer role in
+different metros.
+
+Cheapest useful version is a soft key on `(company_id, title_norm)`: collapse them in the
+review queue with a "also in 8 other locations" line, keep every row in the DB. Deciding
+which of two rows survives is a judgement call, and the whole point of `apply_url_norm` being
+a constraint is that nothing silently discards a shot — but showing one card instead of nine
+discards nothing.
 
 ## Phase 5 — inbox poller
 
