@@ -47,18 +47,43 @@ helper should reject any pair not in the table above rather than trusting caller
 
 | Module | Trigger | Responsibility |
 | --- | --- | --- |
-| `ingest` | launchd, 2×/day | JobSpy (Indeed, Google) → normalize → dedup → `discovered` |
+| `ingest` | launchd, 2×/day | JobSpy (Indeed) + direct ATS board polls → normalize → dedup → `discovered` |
 | `score` | after ingest | deterministic prefilter, then LLM scoring on survivors (batch) |
 | `digest` | launchd, 8am weekdays | Telegram: top ~8 `scored`, inline approve/skip buttons |
 | `tailor` | on `job_approved` | render resume PDF + resolve answer set → `packet_ready` |
 | `inbox` | launchd, hourly | Gmail API → classify → write events, close forgotten `applied` |
-
-Only the Mac mini runs these. See Deployment below.
 | `dashboard` | always on | packet view, "I applied" button, stats, manual entry |
 | `load-profile` | on demand | import `docs/profile/*` into SQLite; idempotent upsert |
 | `chat` | on demand | gap-filling only — resolves `unknown_questions`, appends to `answers` |
 
+Only the Mac mini runs these. See Deployment below.
+
 All workers are stateless. State lives in SQLite. Any worker can be killed and rerun.
+
+### Discovery has two sources, on purpose
+
+`ingest` runs both, and they fail in different ways.
+
+**JobSpy against Indeed.** Works today; it is a scrape, and it is the only source
+that can get us banned. Of the four US sources JobSpy exposes, Indeed is the only one
+that returns anything — Google, ZipRecruiter and Glassdoor all returned zero when
+measured on 2026-08-03. Google is not coming back: a plain HTTP request to
+`google.com/search` now returns a JavaScript gate rather than results, for any query,
+with or without `udm=8`, and the only fix is executing JS. That is browser automation,
+which is a hard non-goal. So Indeed is paced at 8s with jitter, and the sweep aborts
+itself after four consecutive empty searches — the scraper reports throttling as zero
+rows, not as an error.
+
+**Direct ATS board polls.** Greenhouse, Lever, and Ashby's own public JSON, for a
+hand-seeded company list in `config/searches.yaml`. Documented endpoints meant for
+machine reads, so there is no markup to rot and no bot detection. Throttled per host
+in `boards.py`, not per run. This is what CLAUDE.md's "aggregator staleness" note
+proposed as optional; it stopped being optional when Google went JS-only and discovery
+had a single point of failure.
+
+The unit of work differs, and that is the real reason to keep both. A keyword search
+can miss a posting whose title used a word I did not think of; a board poll returns the
+entire company but only for companies I already know to watch.
 
 ## Algorithms
 

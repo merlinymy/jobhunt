@@ -142,6 +142,12 @@ rather than silently dropped.
       `make ingest` prints the count of searches that returned nothing, every run, so a
       source dying quietly is visible rather than looking like a slow week.
       Verified end to end: 36 searches, 1210 postings, 528 new, rerun inserted 0.
+- [x] Direct ATS board polling — Greenhouse, Lever, Ashby, for a seeded company list.
+      52 boards, 8,735 postings in ~70s, of which 4,864 pass the title rule. Seeded from
+      the Indeed sweep itself: 28 Greenhouse boards recovered by following `grnh.se`
+      short links. Throttled per host (1 req/s, jittered, `Retry-After` honoured, 429
+      abandons that vendor for the run). This is the durable source — vendors' own JSON,
+      no markup to rot.
 - [x] URL normalization + hard dedup. Soft dedup is **not** done — see below.
 - [ ] `contacts` seeded from `docs/profile/contacts.csv` (LinkedIn export + hand additions)
 - [ ] Pass 1 deterministic prefilter driven by `docs/profile/scoring.yaml`
