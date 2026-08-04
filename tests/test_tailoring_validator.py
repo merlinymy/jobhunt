@@ -240,6 +240,26 @@ FABRICATIONS: list[tuple[str, list[dict]]] = [
         [{"id": 3, "text": "Reduced infrastructure spend by thirty percent by rightsizing "
                            "worker pools."}],
     ),
+    # Identifiers carrying a number. The lookbehind that stops `p99` reading as a
+    # bare `9` also hid the whole token, so these were all accepted: a changed
+    # percentile, a changed version, a changed molecule.
+    (
+        "percentile shifted (p99 -> p95)",
+        [{"id": 1, "text": "Cut p95 checkout latency from 840ms to 210ms."}],
+    ),
+    (
+        "percentile weakened (p99 -> p50)",
+        [{"id": 1, "text": "Cut p50 checkout latency from 840ms to 210ms."}],
+    ),
+    (
+        "count smuggled in as an identifier",
+        [{"id": 1, "text": "Cut p99 latency from 840ms to 210ms across svc12 deployments."}],
+    ),
+    # Homoglyph: Cyrillic Ѕ, which leaves `tripe` for the ASCII word regex.
+    (
+        "invented employer spelled with a Cyrillic S",
+        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms at Ѕtripe."}],
+    ),
     # A technology the corpus knows, but from a different parent:
     (
         "tool borrowed from another parent, lowercase",
@@ -348,6 +368,21 @@ LEGITIMATE: list[tuple[str, list[dict]]] = [
         "ordinary lowercase word that is not a corpus name",
         [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms with an in-memory "
                            "cache in front of the pricing call."}],
+    ),
+    # Guards on the identifier and homoglyph checks. Both fail toward rejection,
+    # so what must keep passing is pinned as tightly as what must not.
+    (
+        "the source's own identifier, kept",
+        [{"id": 1, "text": "Held p99 checkout latency at 210ms, down from 840ms."}],
+    ),
+    (
+        "unit glued to a sourced number is not an identifier",
+        [{"id": 1, "text": "Cut checkout latency from 840ms to 210ms."}],
+    ),
+    (
+        "identifier from the parent's tech list, not this bullet's sentence",
+        [{"id": 5, "text": "Built the rollout pipeline on Kubernetes, shipping the dashboard "
+                           "to each cluster."}],
     ),
 ]
 

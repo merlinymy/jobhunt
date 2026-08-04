@@ -39,6 +39,13 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 # rejects the `9` at the start of `p99` and then matches the second `9` on the
 # next position, so `p99` reads as a bare `9` the source never mentions.
 _STANDALONE_NUMBER = re.compile(r"(?<![A-Za-z0-9])\d+(?:[.,]\d+)*")
+# The other half of that trade. Skipping an identifier stops `p99` reading as a
+# bare `9`, but it also hid the token completely, so `p99` -> `p95` and `v1` ->
+# `v4` were accepted: a changed percentile and a changed version, neither of them
+# a claim the source makes. Uppercase ones were already caught as proper nouns
+# (`Y537S` -> `Y538S`); lowercase ones matched nothing at all. So the token gets
+# compared whole, which covers both cases and needs no case rule.
+_GLUED_TOKEN = re.compile(r"[A-Za-z]+\d+[A-Za-z0-9]*")
 
 # Numbers spelled out. Rule 2 is about claims, not digits, and "forty services"
 # asserts exactly what "40 services" does. Mapped to digits so a source that
@@ -505,12 +512,52 @@ def validate(
                 f"in its source row. Source: {source['text']!r}"
             )
 
+        # Names a bullet may use beyond its own sentence — technologies recorded
+        # against the same role or project. Rule 2 keeps numbers pinned to the
+        # bullet itself; names are allowed to come from the parent, because
+        # "changing which skills are foregrounded" is explicitly permitted.
+        context = f"{haystack} {noun_context.get(bid, '')}"
+
+        # 2b. Identifiers carrying a number — `p99`, `v1`, `Y537S`, `BM25`,
+        #     `base64`. Rule 2 skips these on purpose (see _GLUED_TOKEN), so
+        #     they are compared whole here instead. Changing one asserts a
+        #     different percentile, version, or molecule.
+        #
+        #     Checked against the bullet's own row, not the widened context the
+        #     name checks use. A digit inside a name is still a number, and rule
+        #     2 pins numbers to their own bullet. The difference is load-bearing:
+        #     ARC's tech list holds "Tailwind CSS v4", which was enough to let
+        #     an ARC bullet reading "since the v1 launch" be reworded to "v4".
+        sourced_tokens = {t.lower() for t in _GLUED_TOKEN.findall(haystack)}
+        invented_tokens = sorted(
+            {t for t in _GLUED_TOKEN.findall(text) if t.lower() not in sourced_tokens}
+        )
+        if invented_tokens:
+            raise FabricationError(
+                f"bullet {bid} uses identifier(s) {invented_tokens} that do not appear "
+                f"in its source row. A digit inside a name is still a claim — `p95` is "
+                f"not `p99` and `v4` is not `v1`. Source: {source['text']!r}"
+            )
+
+        # 2c. A non-ASCII letter the source never uses. `_WORD` is ASCII-anchored,
+        #     so a Cyrillic Ѕ in `Ѕtripe` leaves `tripe` — a lowercase word the
+        #     proper-noun check below skips — and a homoglyph is how a name gets
+        #     past a name check. Not an ASCII-only rule: `ERα` is in the corpus,
+        #     so the test is whether the source uses that character at all.
+        foreign = sorted(
+            {c for c in text if ord(c) > 127 and c.isalpha() and c not in context}
+        )
+        if foreign:
+            raise FabricationError(
+                f"bullet {bid} contains letter(s) {foreign} that appear nowhere in its "
+                f"source row — a homoglyph reads as an ordinary word to every check "
+                f"here. Source: {source['text']!r}"
+            )
+
         # 3 and 4. Employers, titles, dates, degrees and schools are structural:
         # they come from `experiences` and `education`, never from bullet text.
         # Any proper noun the source row does not contain is an invention.
-        invented_names = _unsourced_proper_nouns(
-            text, f"{haystack} {noun_context.get(bid, '')}", known_names
-        )
+        invented_names = _unsourced_proper_nouns(text, context, known_names)
         if invented_names:
             raise FabricationError(
                 f"bullet {bid} mentions {invented_names}, which do not appear in its "
