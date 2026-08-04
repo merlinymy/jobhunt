@@ -17,16 +17,80 @@ TRACKING_PARAMS = frozenset(
 TRACKING_PREFIXES = ("utm_",)
 
 # Ordered: first match wins. Keyed on host, slug pulled from host or path.
+#
+# Every pattern below the first block was added from real apply URLs that came
+# back from a live ingest sweep, after 9 of 25 postings bucketed as "direct".
+# That number is not cosmetic: the stats page reports conversion by ATS, so a
+# misfiled Greenhouse posting silently makes Greenhouse look like it converts
+# worse than it does. Re-check this list whenever the "direct" share climbs.
 ATS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("greenhouse", re.compile(r"^(?:job-boards|boards)\.greenhouse\.io/([^/]+)")),
+    # Greenhouse's own shortener, and the commonest form Indeed hands back —
+    # 6 of the first 25 postings. The slug is the posting, not the company, so
+    # there is no company slug to pull out of it.
+    ("greenhouse", re.compile(r"^grnh\.se/")),
     ("lever", re.compile(r"^jobs\.lever\.co/([^/]+)")),
     ("ashby", re.compile(r"^jobs\.ashbyhq\.com/([^/]+)")),
     ("workable", re.compile(r"^apply\.workable\.com/([^/]+)")),
     ("workday", re.compile(r"^([^.]+)\.(?:wd\d+\.)?myworkdayjobs\.com")),
-    ("taleo", re.compile(r"^([^.]+)\.taleo\.net")),
-    ("smartrecruiters", re.compile(r"^careers\.smartrecruiters\.com/([^/]+)")),
+    # Workday's other host. Here the tenant is in the path, not the subdomain:
+    # `wd5.myworkdaysite.com/recruiting/livingspaces/...`.
+    ("workday", re.compile(r"^wd\d*\.myworkdaysite\.com/recruiting/([^/]+)")),
+    # `([^.]+)\.taleo\.net` only matched a single label, so the real-world
+    # `phh.tbe.taleo.net` — Taleo's Business Edition, which is most of them —
+    # missed entirely. Anchor on the tail and take the first label as the slug.
+    ("taleo", re.compile(r"^([^.]+)(?:\.[^.]+)*\.taleo\.net")),
+    # `careers.` only, until a live sweep returned `jobs.smartrecruiters.com`.
+    ("smartrecruiters", re.compile(r"^(?:careers|jobs)\.smartrecruiters\.com/([^/]+)")),
     ("icims", re.compile(r"^([^.]+)\.icims\.com")),
+    # Oracle Recruiting Cloud. Two host shapes in one sweep
+    # (`eklm.fa.us2.oraclecloud.com`, `fa-ertb-saasfaprod1.fa.ocs.oraclecloud.com`),
+    # and the first label is a tenant id rather than a company name, so no slug.
+    ("oracle", re.compile(r"^[^/]*\.oraclecloud\.com")),
+    ("adp", re.compile(r"^(?:workforcenow|recruiting)\.adp\.com")),
+    ("paycor", re.compile(r"^(?:recruiting\.)?(?:recruitingbypaycor|paycor)\.com")),
+    ("bamboohr", re.compile(r"^([^.]+)\.bamboohr\.com")),
+    # The real host is `app.jobvite.com`; `jobs.jobvite.com` never appeared.
+    ("jobvite", re.compile(r"^(?:app|jobs)\.jobvite\.com")),
+    ("breezy", re.compile(r"^([^.]+)\.breezy\.hr")),
+    ("rippling", re.compile(r"^ats\.rippling\.com/([^/]+)")),
+    ("jazzhr", re.compile(r"^([^.]+)\.applytojob\.com")),
+    ("paylocity", re.compile(r"^recruiting\.paylocity\.com")),
+    ("pinpoint", re.compile(r"^([^.]+)\.pinpointhq\.com")),
+    ("careerplug", re.compile(r"^([^.]+)\.careerplug\.com")),
+    ("avature", re.compile(r"^([^.]+)\.avature\.net")),
+    ("eightfold", re.compile(r"^([^.]+)\.eightfold\.ai")),
+    ("oorwin", re.compile(r"^([^.]+)\.oorwin\.ai")),
+    ("trinet", re.compile(r"^app\.trinethire\.com")),
+    ("applicantpro", re.compile(r"^(?:www\.)?applicantpro\.com")),
+    ("jobdiva", re.compile(r"^www\d*\.jobdiva\.com")),
+    ("ceipal", re.compile(r"^candidateportal\.ceipal\.com")),
 )
+
+# Aggregator redirect wrappers. Not an ATS — the real apply URL is behind a
+# token, so these are a *dedup* problem: one posting reached through a wrapper
+# and again directly produces two `apply_url_norm` keys and gets tracked twice.
+# Recognised here so the size of that problem is visible rather than hiding in
+# the "direct" bucket on the stats page. `recruitics` carries the real URL in
+# its `rx_url` query param and could be unwrapped; the rest are opaque. Both are
+# the "soft dedup" line item in docs/build-plan.md Phase 4, not solved here.
+REDIRECT_HOSTS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^click\.appcast\.io/"),
+    re.compile(r"^jsv\d*\.recruitics\.com/"),
+    re.compile(r"^rr\.jobsyn\.org/"),
+    re.compile(r"^dsp\.prng\.co/"),
+    re.compile(r"^tnl\d*\.jometer\.com/"),
+)
+
+
+def is_redirect_wrapper(apply_url: str) -> bool:
+    """True if the URL is an aggregator redirect rather than a real apply page."""
+    try:
+        parts = urlsplit(apply_url if "//" in apply_url else f"https://{apply_url}")
+        target = f"{(parts.hostname or '').lower().removeprefix('www.')}{parts.path}"
+    except ValueError:
+        return False
+    return any(pattern.match(target) for pattern in REDIRECT_HOSTS)
 
 
 def _is_tracking(key: str) -> bool:
@@ -87,7 +151,12 @@ def detect_ats(apply_url: str) -> tuple[str | None, str | None]:
     for name, pattern in ATS_PATTERNS:
         match = pattern.match(target)
         if match:
-            return name, match.group(1).lower()
+            # Some hosts carry no company slug at all — a Greenhouse short link
+            # names the posting, an Oracle tenant id names nothing. Knowing the
+            # ATS is the point; the slug is a bonus, so its absence is None
+            # rather than a reason to report no match.
+            slug = match.group(1).lower() if match.groups() and match.group(1) else None
+            return name, slug
     return None, None
 
 
