@@ -20,7 +20,9 @@ llm = ["anthropic>=0.40"]                      # Phase 2/4/5 — llm.py
 # The `full` extra is not optional for us: plain `rendercv` ships the schema and
 # the Jinja templates but not typst, and without typst there is no PDF.
 resume = ["rendercv[full]>=2.8"]               # Phase 2 — master data -> PDF
-ingest = ["python-jobspy>=1.1.70"]             # Phase 4 — discovery
+# 1.1.82 is what a working sweep was verified against. Of the four US sources it
+# exposes, only Indeed returns anything — see config/searches.yaml.
+ingest = ["python-jobspy>=1.1.82"]             # Phase 4 — discovery
 inbox = [                                      # Phase 5 — Gmail poller
   "google-api-python-client>=2.140",
   "google-auth-oauthlib>=1.2",

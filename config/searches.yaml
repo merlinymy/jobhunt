@@ -1,0 +1,66 @@
+# What `make ingest` searches for. Read by jobhunt/ingest.py.
+#
+# Why this is not in docs/profile/scoring.yaml: these are query strings tuned for
+# one job board, not facts about me. `scoring.yaml` holds `title_keywords`, which
+# look similar and are not the same thing — those are substring *filters* applied
+# to titles that come back, and using them as queries would search Indeed for
+# "engineer" and return mechanical and civil roles all day. Filtering stays in
+# `score`; this file only decides what gets pulled.
+#
+# ---------------------------------------------------------------------------
+# Source reality, measured 2026-08-03. Of the four US sources JobSpy exposes,
+# exactly one returned anything:
+#
+#   indeed         8/8 rows, every one with a direct ATS URL and a description
+#   google         0 rows — "initial cursor not found" on every phrasing tried
+#   zip_recruiter  0 rows
+#   glassdoor      0 rows
+#
+# docs/architecture.md says "Indeed, Google". Google is dead, so Indeed is the
+# whole discovery pipeline right now. That is a single point of failure, and
+# CLAUDE.md's "Aggregator staleness" note — polling Greenhouse/Lever/Ashby JSON
+# for a seeded company list — is the answer if Indeed follows. LinkedIn is not
+# an option here and never will be; see the non-goals.
+#
+# Re-check the dead ones occasionally by adding them to `sites` and watching the
+# per-source counts. Nothing breaks if a source returns nothing.
+# ---------------------------------------------------------------------------
+
+sites: [indeed]
+
+# Only postings newer than this are pulled. Two runs a day at 168h means every
+# posting is seen ~14 times; `apply_url_norm` makes the repeats free, and the
+# window matters more than the frequency for anything posted over a weekend.
+hours_old: 168
+
+# Per search term, per location. Indeed paginates, so this is roughly a cap on
+# how deep to go rather than a promise.
+results_wanted: 40
+
+# Real query strings, not filter keywords. Broad enough that the title filter in
+# `score` has something to work on, narrow enough not to pull another field.
+terms:
+  - software engineer
+  - full stack developer
+  - backend engineer
+  - frontend engineer
+
+# Searched in order. `remote: true` runs the term with no geography and Indeed's
+# remote flag set; everything else is a metro string Indeed understands. These
+# mirror docs/profile/scoring.yaml `location_rank`, which is what orders the
+# digest — but note the digest ranks and never rejects, so this list being
+# shorter than that one only means fewer places are searched, not filtered.
+locations:
+  - {remote: true}
+  - {city: "San Francisco, CA"}
+  - {city: "Oakland, CA"}
+  - {city: "San Jose, CA"}
+  - {city: "Los Angeles, CA"}
+  - {city: "Boston, MA"}
+  - {city: "Chicago, IL"}
+  - {city: "Seattle, WA"}
+  - {city: "Atlanta, GA"}
+
+# Indeed rate-limits. Seconds to wait between searches; raise it if runs start
+# coming back empty from a query that used to work.
+delay_seconds: 3
