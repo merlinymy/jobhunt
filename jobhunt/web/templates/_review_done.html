@@ -1,7 +1,12 @@
 {# Replaces a card once decided. Kept in place rather than vanishing so the
    decision is visible and an accidental click is obvious immediately. #}
 <article class="review-card decided {{ outcome }}">
-  <span>{{ '✅ Approved' if outcome == 'approved' else '⏭ Skipped' }} — {{ title }}</span>
+  <span>
+    {{ '✅ Approved' if outcome == 'approved' else '⏭ Skipped' }} — {{ title }}
+    {% if siblings %}
+      <span class="muted">· {{ siblings }} duplicate listing{{ '' if siblings == 1 else 's' }} closed</span>
+    {% endif %}
+  </span>
   {% if outcome == 'approved' %}
     <a class="quiet" href="/packet/{{ application_id }}">build packet →</a>
   {% endif %}

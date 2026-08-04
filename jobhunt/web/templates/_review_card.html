@@ -7,6 +7,11 @@
       <div class="meta">
         {{ item.company }} · {{ item.where }}
         {% if item.comp %} · {{ item.comp }}{% endif %}
+        {% if item.also_in %}
+          {# Same company, same normalized title, other cities. One shot, not
+             {{ item.also_in + 1 }} — deciding this card decides all of them. #}
+          <span class="tag">also in {{ item.also_in }} other location{{ '' if item.also_in == 1 else 's' }}</span>
+        {% endif %}
       </div>
     </div>
     <div class="scorebox {% if item.score >= 80 %}good{% elif item.score >= 50 %}warn{% endif %}">

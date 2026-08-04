@@ -539,7 +539,7 @@ def post_tailor(
     pdf_name = f"tailored_{stamp}_{secrets.token_hex(3)}.pdf"
     try:
         resume.render(
-            resume.build_document(conn, selection=result.selection()),
+            resume.build_document(conn, selection=result.selection(), jd_text=jd_text),
             config.OUT_DIR / pdf_name,
         )
     except resume.ResumeError as exc:
@@ -590,13 +590,47 @@ REVIEW_LIMIT = 8
 JD_EXCERPT = 1200
 
 
+def _siblings(conn: sqlite3.Connection, application_id: int) -> list[int]:
+    """Other `scored` rows that are the same role at the same company.
+
+    One company listing a role in nine cities is nine rows. They are genuinely
+    nine postings — nine apply URLs, nine `apply_url_norm` keys — but they are
+    one *shot*, and I will submit to exactly one of them.
+    """
+    return [
+        int(r["id"])
+        for r in conn.execute(
+            """
+            SELECT other.id
+              FROM applications a
+              JOIN jobs j       ON j.id = a.job_id
+              JOIN jobs oj      ON oj.company_id = j.company_id
+                               AND oj.title_norm = j.title_norm
+              JOIN applications other ON other.job_id = oj.id
+             WHERE a.id = ? AND other.id != a.id AND other.state = ?
+            """,
+            (application_id, states.SCORED),
+        )
+    ]
+
+
 def _review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
-    """Top `limit` scored postings, plus how many are waiting in total."""
+    """Top `limit` scored postings, plus how many are waiting in total.
+
+    Collapsed on `(company_id, title_norm)`. Measured on a real run: 160 of 661
+    scored rows were the same role relisted per metro — 24% of the queue — and
+    six of the first eight cards were one Clera founding-engineer posting in
+    different cities. Showing eight cards that are really three is not a queue.
+
+    Nothing is deleted or hidden from the DB; the pipeline table still has every
+    row. This picks the best-located member of each group to show, which is why
+    the sort runs before the grouping rather than after.
+    """
     rows = conn.execute(
         """
         SELECT a.id AS application_id, a.score, a.score_reasoning,
-               j.title, j.location, j.remote, j.apply_url, j.jd_text,
-               j.comp_min, j.comp_max, c.name AS company,
+               j.title, j.title_norm, j.company_id, j.location, j.remote,
+               j.apply_url, j.jd_text, j.comp_min, j.comp_max, c.name AS company,
                (SELECT ct.name FROM contacts ct
                  WHERE ct.company_id = c.id AND ct.do_not_contact = 0
                  ORDER BY ct.id LIMIT 1) AS referral
@@ -613,8 +647,21 @@ def _review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, 
         rows, key=lambda r: (prefilter.location_tier(r, cfg), -(r["score"] or 0))
     )
 
+    # Sorted first, so the survivor of each group is the best-located one — the
+    # remote listing of a role wins over the Houston one, which is the whole
+    # point of ranking location.
+    seen: dict[tuple[int, str], int] = {}
+    collapsed = []
+    for row in ranked:
+        key = (int(row["company_id"]), row["title_norm"] or row["title"])
+        if key in seen:
+            seen[key] += 1
+            continue
+        seen[key] = 0
+        collapsed.append(row)
+
     batch = []
-    for row in ranked[:limit]:
+    for row in collapsed[:limit]:
         where = row["location"] or "—"
         if (row["remote"] or "").lower() == "remote":
             where = f"Remote · {where}" if row["location"] else "Remote"
@@ -632,8 +679,9 @@ def _review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, 
             "score": row["score"] or 0, "reason": row["score_reasoning"] or "",
             "apply_url": row["apply_url"], "comp": comp, "referral": row["referral"],
             "excerpt": (jd[:JD_EXCERPT] + "…") if len(jd) > JD_EXCERPT else jd,
+            "also_in": seen[(int(row["company_id"]), row["title_norm"] or row["title"])],
         })
-    return batch, len(rows)
+    return batch, len(collapsed)
 
 
 @app.get("/review", response_class=HTMLResponse)
@@ -652,17 +700,35 @@ def _decide(request: Request, conn: sqlite3.Connection, application_id: int, to_
     row = queries.get_application(conn, application_id)
     if row is None:
         raise HTTPException(404, "no such application")
+    siblings = _siblings(conn, application_id)
     try:
         states.transition(conn, application_id, to_state, detail="review queue")
     except states.InvalidTransition as exc:
         # Already decided elsewhere — two tabs, or a double-click. Say what it is
         # rather than 500ing, and leave the card showing the real outcome.
         raise HTTPException(409, str(exc)) from exc
+
+    # The same role in eight other cities is the same shot. Leaving them
+    # `scored` means they surface again tomorrow and the queue never drains;
+    # deciding them here is recorded as its own event naming the row that
+    # decided them, so nothing vanishes without a trace.
+    closed = 0
+    for sibling in siblings:
+        try:
+            states.transition(
+                conn, sibling, states.SKIPPED,
+                detail=f"duplicate listing of application {application_id}",
+            )
+            closed += 1
+        except states.InvalidTransition:
+            continue
+
     return templates.TemplateResponse(
         request, "_review_done.html",
         {
             "application_id": application_id,
             "title": row["title"],
+            "siblings": closed,
             "outcome": "approved" if to_state == states.JOB_APPROVED else "skipped",
         },
     )
