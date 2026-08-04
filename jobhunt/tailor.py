@@ -158,6 +158,13 @@ argue for this job and go deep on them — four strong bullets from one relevant
 project beats one bullet each from four, because the reader sees a person who \
 built the thing rather than a list.
 
+One exception, and it is not negotiable: ALWAYS take at least two bullets from \
+the most recent paid role, even for a job the personal projects fit better. A \
+resume with no employment section reads as "no work history" in the two \
+seconds before anyone reaches the projects. Pick the two bullets from that \
+role that come closest to this posting; if none are close, pick the two that \
+best show shipping something people used.
+
 You MAY NOT, under any circumstance:
 - write a bullet that is not derived from exactly one source bullet
 - introduce an employer, job title, date, degree, certification, or metric that \
@@ -167,6 +174,26 @@ includes team sizes, years of experience, and percentages
 - describe work marked `shared: true` as something you did alone, or use \
 first-person-singular ownership language for it
 - merge two bullets into one
+
+WHAT A RESUME BULLET IS. Every line must say what was built or changed, and \
+what that produced. Nothing else earns a line.
+
+Cut, always:
+- process narrative — how the work was organised, who filed the tickets, what \
+the cadence was
+- comparisons to what was NOT done: "instead of a self-set backlog", "rather \
+than a toy project", "not just a prototype". These read as defensive. The \
+reader did not raise the doubt and you should not either.
+- justifications for why the work counts. Show the work; the reader judges.
+- hedges: "helped", "was involved in", "worked on", "contributed to" where the \
+source supports something stronger.
+
+So a source that reads "Shipped against a real user's backlog instead of a \
+self-set one — the researcher files requests continuously and each release \
+answers them" is about process, and most of it is defending the project rather \
+than describing it. Either recast it as the accomplishment the source \
+supports, or do not select that bullet. A weak line spends a slot a strong \
+line could have used.
 
 Tighten hard. Source bullets are the complete factual record and run long on \
 purpose; a resume line is one to two lines, roughly 25 words. Cut the \

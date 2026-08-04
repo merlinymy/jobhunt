@@ -386,21 +386,47 @@ def build_cv(
 
     if not sections:
         raise ResumeError("the corpus is empty. Run `make load-profile` first.")
-    return {**_header(facts), "sections": _ordered(sections)}
+
+    # Which section leads is the tailor's call, not a constant. It saw the JD and
+    # was told to order `bullets` the way they should appear, so the parent of
+    # its first pick is the evidence it thinks argues hardest. Taking that at
+    # face value beats re-deriving relevance here from the same JD it already read.
+    projects_first = False
+    if selection:
+        first = next(iter(selection))
+        projects_first = any(
+            first in {int(b["id"]) for b in rows} for rows in by_project.values()
+        )
+    return {
+        **_header(facts),
+        "sections": _ordered(sections, projects_first=projects_first),
+    }
 
 
 # RenderCV renders sections in the order the mapping gives them, so until now the
-# order was whichever order `build_cv` happened to write them in — skills last,
-# because that is where the code that builds it sits. This makes it a decision.
-# Skills lead, as in oldProjects/cv-builder: it is the section a keyword screen
-# reads first, and it is the cheapest one for a human to skim.
+# order was whichever order `build_cv` happened to write them in. This makes it a
+# decision. Skills lead, as in oldProjects/cv-builder: it is the section a
+# keyword screen reads first, and the cheapest one for a human to skim.
 _SECTION_ORDER = ("skills", "experience", "projects", "education")
 
 
-def _ordered(sections: dict[str, list[Any]]) -> dict[str, list[Any]]:
-    """`sections`, in resume order. Anything unlisted keeps its position, last."""
-    known = [name for name in _SECTION_ORDER if name in sections]
-    rest = [name for name in sections if name not in _SECTION_ORDER]
+def _ordered(
+    sections: dict[str, list[Any]], *, projects_first: bool = False
+) -> dict[str, list[Any]]:
+    """`sections`, in resume order. Anything unlisted keeps its position, last.
+
+    `projects_first` swaps experience and projects. With one work entry and four
+    substantial projects, a fixed order buries the strongest evidence: for an
+    LLM-infrastructure role, ARC argues the case and the freelance role is
+    context. The reader gives the top third of one page real attention, so
+    whichever section better matches the posting has to be in it.
+    """
+    order = list(_SECTION_ORDER)
+    if projects_first:
+        i, j = order.index("experience"), order.index("projects")
+        order[i], order[j] = order[j], order[i]
+    known = [name for name in order if name in sections]
+    rest = [name for name in sections if name not in order]
     return {name: sections[name] for name in (*known, *rest)}
 
 
