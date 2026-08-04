@@ -27,8 +27,10 @@ cannot drift between sources.
 
 from __future__ import annotations
 
+import html
 import json
 import random
+import re
 import threading
 import time
 import urllib.error
@@ -145,6 +147,34 @@ def _iso(value: Any) -> str | None:
     return str(value).strip() or None
 
 
+_TAG = re.compile(r"<[^>]+>")
+_BLANKS = re.compile(r"\n{3,}")
+
+
+def _plain(markup: str | None) -> str | None:
+    """HTML(-escaped) job description -> readable text.
+
+    Greenhouse returns `content` as *escaped* HTML: the literal characters
+    `&lt;p&gt;`, not `<p>`. Stored raw, the scorer reads a page of entity noise
+    instead of the posting, which costs tokens and buys nothing — and `tailor`
+    would eventually quote it. Unescape first, then strip tags; block-level tags
+    become newlines so the structure survives.
+    """
+    if not markup:
+        return None
+    text = html.unescape(str(markup))
+    # A second pass: some boards double-escape, so one unescape leaves `&lt;p&gt;`
+    # as `<p>` and another leaves the entities the first pass created.
+    if "&lt;" in text or "&amp;" in text:
+        text = html.unescape(text)
+    text = re.sub(r"(?i)<(?:br|/p|/div|/li|/h[1-6])\s*/?>", "\n", text)
+    text = re.sub(r"(?i)<li[^>]*>", "\n- ", text)
+    text = _TAG.sub("", text)
+    text = html.unescape(text)  # entities that were inside tags
+    text = _BLANKS.sub("\n\n", text)
+    return text.strip() or None
+
+
 def _row(
     *,
     title: str | None,
@@ -207,9 +237,7 @@ def greenhouse(slug: str) -> list[dict[str, Any]]:
                 apply_url=job.get("absolute_url"),
                 site="greenhouse",
                 location=location or None,
-                # HTML-escaped markup. `score` and `tailor` read this as context,
-                # not as anything rendered, so it is stored as sent.
-                description=job.get("content"),
+                description=_plain(job.get("content")),
                 date_posted=_iso(job.get("updated_at") or job.get("first_published")),
                 is_remote="remote" in (location or "").lower(),
             )
@@ -242,7 +270,7 @@ def lever(slug: str) -> list[dict[str, Any]]:
                 apply_url=job.get("applyUrl") or job.get("hostedUrl"),
                 site="lever",
                 location=categories.get("location") or categories.get("allLocations"),
-                description=job.get("descriptionPlain") or job.get("description"),
+                description=job.get("descriptionPlain") or _plain(job.get("description")),
                 date_posted=_iso(job.get("createdAt")),
                 is_remote="remote" in workplace.lower(),
                 min_amount=salary.get("min"),
@@ -281,7 +309,7 @@ def ashby(slug: str) -> list[dict[str, Any]]:
                 apply_url=job.get("applyUrl") or job.get("jobUrl"),
                 site="ashby",
                 location=job.get("location"),
-                description=job.get("descriptionPlain") or job.get("descriptionHtml"),
+                description=job.get("descriptionPlain") or _plain(job.get("descriptionHtml")),
                 date_posted=_iso(job.get("publishedAt") or job.get("updatedAt")),
                 is_remote=bool(job.get("isRemote")),
                 min_amount=summary.get("minValue"),
@@ -384,7 +412,7 @@ def workable(slug: str) -> list[dict[str, Any]]:
                 apply_url=job.get("application_url") or job.get("url") or job.get("shortlink"),
                 site="workable",
                 location=job.get("location") or job.get("city"),
-                description=job.get("description"),
+                description=_plain(job.get("description")),
                 date_posted=_iso(job.get("published_on") or job.get("created_at")),
                 is_remote=bool(job.get("telecommuting")),
             )
