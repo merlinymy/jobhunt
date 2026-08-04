@@ -238,6 +238,25 @@ def _tech_union(
                     seen.setdefault(item.strip(), strength)
     items = [item for item in seen if item]
 
+    # Collapse a bare name into its versioned form. Two projects legitimately
+    # record "React" and "React 19", and a Skills line reading "React, React 19"
+    # looks like the list was generated rather than written. The more specific
+    # form wins, and it inherits the stronger of the two claims.
+    def head(item: str) -> str:
+        return re.sub(r"\s+[\d.]+$", "", item).strip().lower()
+
+    by_head: dict[str, str] = {}
+    for item in items:
+        key = head(item)
+        kept = by_head.get(key)
+        if kept is None or len(item) > len(kept):
+            if kept is not None:
+                seen[item] = min(seen[item], seen[kept])
+            by_head[key] = item
+        else:
+            seen[kept] = min(seen[kept], seen[item])
+    items = [item for item in items if by_head.get(head(item)) == item]
+
     if jd_text:
         # Order by what the posting actually asks for, then by how well I know
         # it, then by corpus order. Nothing is invented and nothing new appears
