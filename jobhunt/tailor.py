@@ -168,6 +168,18 @@ includes team sizes, years of experience, and percentages
 first-person-singular ownership language for it
 - merge two bullets into one
 
+Tighten hard. Source bullets are the complete factual record and run long on \
+purpose; a resume line is one to two lines, roughly 25 words. Cut the \
+qualifications, the parenthetical asides, and the second and third claims — \
+keep the one that argues for THIS job. Dropping detail is always allowed. \
+Adding it never is.
+
+Use the corpus's own vocabulary for anything it names. If a bullet says \
+Claude, write Claude, not "an LLM". If it says Qdrant, do not write "a vector \
+database". A category word the source never uses reads as an unsourced claim \
+to the validator and the whole result is rejected — and the specific name is \
+better resume copy anyway.
+
 Start every bullet with a verb. Never open one with a company, product, or \
 tool name — the validator reads a capitalized first word as a proper-noun \
 claim and rejects the result. Write technology names with their normal \
@@ -724,17 +736,43 @@ def tailor(
     if not jd_text.strip():
         raise TailorError("no job description to tailor against")
     corpus, prompt = build_prompt(conn, jd_text, limit=limit)
-    raw = llm.complete(
-        "tailor",
-        prompt,
-        conn=conn,
-        system=_SYSTEM,
-        cached=corpus,
-        application_id=application_id,
-        expect_repeat=expect_repeat,
-    )
-    emitted, reasoning = parse_response(raw)
-    return TailorResult(bullets=validate(conn, emitted), reasoning=reasoning)
+
+    # One retry, with the validator's own complaint handed back. A rejection is
+    # usually a single word — a category term the source never used, a number
+    # reworded into a form the corpus does not contain — and the model fixes it
+    # immediately when told exactly what tripped. Without this a rejection is a
+    # dead end: no resume, and the only wording that reliably survives is
+    # verbatim, which is untailored by definition.
+    #
+    # Exactly one retry. The validator is the guarantee, and a loop that keeps
+    # asking until something passes is a loop that eventually accepts whatever
+    # the model was most determined to say.
+    attempt_prompt = prompt
+    last: FabricationError | None = None
+    for attempt in (1, 2):
+        raw = llm.complete(
+            "tailor",
+            attempt_prompt,
+            conn=conn,
+            system=_SYSTEM,
+            cached=corpus,
+            application_id=application_id,
+            expect_repeat=expect_repeat,
+        )
+        emitted, reasoning = parse_response(raw)
+        try:
+            return TailorResult(bullets=validate(conn, emitted), reasoning=reasoning)
+        except FabricationError as exc:
+            if attempt == 2:
+                raise
+            last = exc
+            attempt_prompt = (
+                f"{prompt}\n\nYour previous answer was REJECTED by the validator:\n\n"
+                f"{exc}\n\nFix only that. Every other bullet was fine. Use the "
+                f"source row's own words for whatever tripped it, or drop the "
+                f"claim — dropping is always allowed, adding never is."
+            )
+    raise last or TailorError("tailoring failed")  # pragma: no cover
 
 
 # ==================================== diff ====================================
