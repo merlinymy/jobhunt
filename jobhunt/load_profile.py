@@ -19,6 +19,8 @@ Output is deliberately counts-only. Employer names do not belong in log output.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sqlite3
 import sys
@@ -27,11 +29,17 @@ from typing import Any
 
 import yaml
 
-from . import config
+from . import config, queries
 from .db import connect, transaction
 
 FACTS_FILE = "facts.yaml"
 EXPERIENCE_FILE = "experience.yaml"
+
+# Both are read, and both are optional. `Connections.csv` is LinkedIn's own
+# export filename, kept as-downloaded so re-exporting is a drag-and-drop rather
+# than a rename; `contacts.csv` is the hand-added side that docs/build-plan.md
+# describes. Same columns, merged, LinkedIn first so a hand-written row wins.
+CONTACT_FILES = ("Connections.csv", "contacts.csv")
 
 
 class ProfileError(RuntimeError):
@@ -103,6 +111,143 @@ def _required(row: dict[str, Any], key: str, where: str) -> str:
     if value is None:
         raise ProfileError(f"{where}: `{key}` is required and is empty")
     return value
+
+
+# ================================== contacts ==================================
+#
+# A LinkedIn connections export, plus any rows added by hand. This is the only
+# way LinkedIn data enters the system — CLAUDE.md rules out anything automated,
+# and this is a file downloaded once and dropped in.
+#
+# These are other people's names, employers, and occasionally email addresses.
+# Nothing here prints one. The counts are the output, the same as everywhere
+# else in this module, and for a stronger reason.
+
+
+def _read_contacts(path: Path) -> list[dict[str, str]]:
+    """A contacts CSV -> normalized dicts. Two schemas, because there are two.
+
+    LinkedIn's export gives `First Name, Last Name, URL, Email Address, Company,
+    Position` and cannot say how well I know someone. The hand-written file uses
+    `name, company, relationship, channel, handle, do_not_contact, notes`, which
+    carries exactly the two things LinkedIn cannot: the strength of the tie, and
+    whether to never surface them. Both are read and normalized here so the rest
+    of the loader sees one shape.
+    """
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    # LinkedIn sometimes prefixes the file with a "Notes:" preamble and a blank
+    # line before the real header. Find the header rather than assuming line 0.
+    start = 0
+    for index, line in enumerate(lines[:10]):
+        lowered = line.lower().lstrip('"')
+        if lowered.startswith(("first name", "name,")):
+            start = index
+            break
+    reader = csv.DictReader(io.StringIO("\n".join(lines[start:])))
+
+    out: list[dict[str, str]] = []
+    for raw in reader:
+        row = {(k or "").strip(): (v or "").strip() for k, v in raw.items() if k}
+        if "First Name" in row or "Last Name" in row:
+            name = " ".join(
+                part for part in (row.get("First Name"), row.get("Last Name")) if part
+            ).strip()
+            out.append(
+                {
+                    "name": name,
+                    "company": row.get("Company", ""),
+                    "relationship": "",  # LinkedIn cannot know this
+                    "channel": "",
+                    "handle": row.get("URL") or row.get("Email Address") or "",
+                    "do_not_contact": "",
+                    "notes": row.get("Position", ""),
+                }
+            )
+        else:
+            out.append({key: row.get(key, "") for key in
+                        ("name", "company", "relationship", "channel",
+                         "handle", "do_not_contact", "notes")})
+    return out
+
+
+def _contact_rows(profile_dir: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for name in CONTACT_FILES:
+        path = profile_dir / name
+        if path.exists():
+            rows.extend(_read_contacts(path))
+    return rows
+
+
+def _load_contacts(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> dict[str, int]:
+    """Upsert contacts, creating the employer company when it is new.
+
+    Creating companies that have no jobs yet is the point, not a side effect.
+    `companies.name_norm` strips legal suffixes, so a connection at "Google LLC"
+    and a posting from "Google" land on one row — which means the digest's
+    referral flag lights up the day a job at that company is discovered, with no
+    backfill step. A company with no jobs is invisible everywhere else, since
+    every other view reaches companies through `jobs`.
+    """
+    counts = {"contacts": 0, "skipped_no_name": 0, "companies_created": 0}
+    before = conn.execute("SELECT COUNT(*) AS n FROM companies").fetchone()["n"]
+
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        if not name:
+            # ~29% of a real export. LinkedIn withholds the name when the
+            # connection has restricted their profile or closed the account;
+            # a contact with no name cannot be asked for a referral.
+            counts["skipped_no_name"] += 1
+            continue
+
+        company_id = None
+        company = (row.get("company") or "").strip()
+        if company:
+            try:
+                company_id = queries.upsert_company(conn, company)
+            except ValueError:
+                # Normalizes to empty — e.g. a company literally named "Inc.".
+                company_id = None
+
+        handle = (row.get("handle") or "").strip() or None
+        channel = (row.get("channel") or "").strip() or (
+            "email" if handle and "@" in handle else "linkedin" if handle else None
+        )
+        # LinkedIn says nothing about how well I know someone, and guessing
+        # would be worse than admitting it: `weak` is the honest default, and
+        # the strength of a tie is exactly the judgement to make by hand.
+        relationship = (row.get("relationship") or "").strip() or "weak"
+        suppress = (row.get("do_not_contact") or "").strip().lower() in {"1", "true", "yes", "y"}
+
+        conn.execute(
+            """
+            INSERT INTO contacts
+                (name, company_id, relationship, channel, handle, notes, do_not_contact)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (name, COALESCE(handle, '')) DO UPDATE SET
+              company_id   = COALESCE(excluded.company_id, company_id),
+              channel      = COALESCE(excluded.channel, channel),
+              notes        = COALESCE(excluded.notes, notes),
+              -- A hand-written `relationship` must survive a LinkedIn re-import,
+              -- which always supplies the placeholder. Only overwrite when the
+              -- incoming row actually says something.
+              relationship = CASE WHEN excluded.relationship = 'weak'
+                                  THEN relationship ELSE excluded.relationship END,
+              -- Never un-suppress. Turning do_not_contact back off because a
+              -- fresh export does not carry the flag is exactly the mistake
+              -- that gets someone contacted who asked not to be.
+              do_not_contact = MAX(do_not_contact, excluded.do_not_contact)
+            """,
+            (name, company_id, relationship, channel, handle,
+             (row.get("notes") or "").strip() or None, int(suppress)),
+        )
+        counts["contacts"] += 1
+
+    after = conn.execute("SELECT COUNT(*) AS n FROM companies").fetchone()["n"]
+    counts["companies_created"] = after - before
+    return counts
 
 
 # ================================= flattening =================================
@@ -242,7 +387,7 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
     flat_facts = _flatten_facts(facts)
     counts = dict.fromkeys(
         ("facts", "experiences", "projects", "bullets", "education", "credentials",
-         "languages", "pruned"),
+         "languages", "contacts", "pruned"),
         0,
     )
     now = config.utcnow()
@@ -400,6 +545,13 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
             )
         counts["languages"] = len(seen_languages)
 
+        contact_rows = _contact_rows(profile_dir)
+        if contact_rows:
+            contact_counts = _load_contacts(conn, contact_rows)
+            counts["contacts"] = contact_counts["contacts"]
+            counts["contacts_skipped"] = contact_counts["skipped_no_name"]
+            counts["companies_created"] = contact_counts["companies_created"]
+
         if prune:
             counts["pruned"] += _prune_missing(
                 conn, "experiences", seen_experiences, child_column="experience_id"
@@ -480,8 +632,15 @@ def main(argv: list[str] | None = None) -> int:
 
     # Counts only. Employer names stay out of log output.
     order = ("facts", "experiences", "projects", "bullets", "education", "credentials",
-             "languages")
+             "languages", "contacts")
     print(" · ".join(f"{counts[name]} {name}" for name in order))
+    # Worth seeing: LinkedIn withholds the name on a sizeable share of an export
+    # (a closed or restricted account), and a contact with no name can never be
+    # asked for a referral. A number that jumps means the export is degrading.
+    if counts.get("contacts_skipped"):
+        print(f"  {counts['contacts_skipped']} contact(s) skipped — no name in the export")
+    if counts.get("companies_created"):
+        print(f"  {counts['companies_created']} company row(s) created from contact employers")
     if args.prune:
         print(f"pruned {counts['pruned']} row(s) no longer in the files")
     return 0
