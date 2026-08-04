@@ -150,9 +150,16 @@ rather than silently dropped.
       no markup to rot.
 - [x] URL normalization + hard dedup. Soft dedup is **not** done — see below.
 - [ ] `contacts` seeded from `docs/profile/contacts.csv` (LinkedIn export + hand additions)
-- [ ] Pass 1 deterministic prefilter driven by `docs/profile/scoring.yaml`
-- [ ] Pass 2 LLM scoring via Batch API, model from `config/models.yaml`
-- [ ] Telegram digest, top ~8, inline approve/skip, referral flag surfaced
+- [x] Pass 1 deterministic prefilter driven by `docs/profile/scoring.yaml` — `prefilter.py`.
+      4,982 real rows → 3,510 in 1.9s. Every check fails open; each rejection records the
+      rule that fired in its `events` row.
+- [x] Pass 2 LLM scoring via Batch API, model from `config/models.yaml` — `score.py`.
+      ~$3 for the whole backlog at Haiku batch rates, and one-time: dedup means a posting
+      is scored once ever. **The live API call is unverified** — needs `ANTHROPIC_API_KEY`.
+- [x] Telegram digest, top ~8, inline approve/skip, referral flag surfaced — `digest.py`.
+      Ordered by location tier then score. Two idempotence guards, not one: the
+      `digest_sent` index stops a posting going twice, and a same-day check stops a rerun
+      sending the *next* eight. **The live Telegram call is unverified** — needs a bot token.
 - [ ] launchd plists for ingest, score, digest
 
 **Gate:** 8 jobs arrive in Telegram each weekday morning and ≥50% get
