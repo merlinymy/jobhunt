@@ -195,7 +195,29 @@ def _highlights(
 MAX_TECHNOLOGIES = 22
 
 
-def _tech_union(rows: list[sqlite3.Row], *, limit: int = MAX_TECHNOLOGIES) -> list[str]:
+def _jd_relevance(item: str, jd_lower: str) -> int:
+    """0 if the posting never mentions this technology, higher if it does.
+
+    Substring on a lowered JD, deliberately crude. A corpus entry is often a
+    phrase — "Qdrant (hybrid dense + sparse)", "React 19 + TypeScript" — so the
+    head word is what a posting will actually contain. Exact phrase scores
+    highest, then the head word, then any word over three characters.
+    """
+    lowered = item.lower().strip()
+    if not lowered or not jd_lower:
+        return 0
+    if lowered in jd_lower:
+        return 3
+    head = re.split(r"[\s(/,+]", lowered, 1)[0].strip()
+    if len(head) > 2 and head in jd_lower:
+        return 2
+    words = [w for w in re.split(r"[^a-z0-9.+#]+", lowered) if len(w) > 3]
+    return 1 if any(w in jd_lower for w in words) else 0
+
+
+def _tech_union(
+    rows: list[sqlite3.Row], *, limit: int = MAX_TECHNOLOGIES, jd_text: str | None = None
+) -> list[str]:
     """Technologies across the corpus, deduped, strongest claim first.
 
     Ordered built -> owned -> maintained -> touched so that first use wins, but
@@ -206,20 +228,37 @@ def _tech_union(rows: list[sqlite3.Row], *, limit: int = MAX_TECHNOLOGIES) -> li
     I know a thing, not by what the posting asked for. Picking per-JD would mean
     letting the tailor choose, which is a Phase 3 change to the prompt contract.
     """
-    seen: dict[str, None] = {}
-    for bucket in ("tech_built", "tech_owned", "tech_maintained", "tech_touched"):
+    seen: dict[str, int] = {}
+    for strength, bucket in enumerate(
+        ("tech_built", "tech_owned", "tech_maintained", "tech_touched")
+    ):
         for row in rows:
             if bucket in row.keys():
                 for item in _json_list(row[bucket]):
-                    seen.setdefault(item.strip(), None)
-    return [item for item in seen if item][:limit]
+                    seen.setdefault(item.strip(), strength)
+    items = [item for item in seen if item]
+
+    if jd_text:
+        # Order by what the posting actually asks for, then by how well I know
+        # it, then by corpus order. Nothing is invented and nothing new appears
+        # — this only decides which 22 of ~50 survive the cut, which is the
+        # difference between a keyword screen seeing React and seeing 3Dmol.js.
+        jd_lower = jd_text.lower()
+        order = {item: index for index, item in enumerate(items)}
+        items.sort(
+            key=lambda item: (-_jd_relevance(item, jd_lower), seen[item], order[item])
+        )
+    return items[:limit]
 
 
 # ================================ the document ================================
 
 
 def build_cv(
-    conn: sqlite3.Connection, *, selection: dict[int, str] | None = None
+    conn: sqlite3.Connection,
+    *,
+    selection: dict[int, str] | None = None,
+    jd_text: str | None = None,
 ) -> dict[str, Any]:
     """Build the RenderCV `cv` mapping from corpus rows.
 
@@ -307,7 +346,7 @@ def build_cv(
     else:
         tech_sources = [r for r in experiences if by_experience.get(int(r["id"])) and _highlights(by_experience[int(r["id"])], selection)]
         tech_sources += [r for r in projects if by_project.get(int(r["id"])) and _highlights(by_project[int(r["id"])], selection)]
-    technologies = _tech_union(tech_sources)
+    technologies = _tech_union(tech_sources, jd_text=jd_text)
     if technologies:
         sections["skills"] = [{"label": "Technologies", "details": ", ".join(technologies)}]
 
@@ -363,11 +402,14 @@ _CREDENTIAL_SECTIONS = {
 
 
 def build_document(
-    conn: sqlite3.Connection, *, selection: dict[int, str] | None = None
+    conn: sqlite3.Connection,
+    *,
+    selection: dict[int, str] | None = None,
+    jd_text: str | None = None,
 ) -> dict[str, Any]:
     """The complete RenderCV input: content plus the pinned format."""
     return {
-        "cv": build_cv(conn, selection=selection),
+        "cv": build_cv(conn, selection=selection, jd_text=jd_text),
         "design": _DESIGN,
         "locale": _LOCALE,
         "settings": {

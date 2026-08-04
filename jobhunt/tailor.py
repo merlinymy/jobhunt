@@ -151,6 +151,13 @@ bullets are worth showing. They are background, not material to quote.
 You MAY: select a subset, reorder, reword, change emphasis, foreground different \
 skills, tighten for length.
 
+Your selection also decides which roles and projects appear on the resume at \
+all: a role or project you pick no bullets from is dropped entirely. So do not \
+spread picks thinly across everything. Pick the two or three that actually \
+argue for this job and go deep on them — four strong bullets from one relevant \
+project beats one bullet each from four, because the reader sees a person who \
+built the thing rather than a list.
+
 You MAY NOT, under any circumstance:
 - write a bullet that is not derived from exactly one source bullet
 - introduce an employer, job title, date, degree, certification, or metric that \
@@ -659,20 +666,42 @@ def _noun_context(conn: sqlite3.Connection) -> dict[int, str]:
         int(row["id"]): words(row, "name") for row in queries.corpus_projects(conn)
     }
 
+    # Every bullet under one parent, pooled. A name the role or project
+    # demonstrably uses is fair on any of its bullets, because "changing which
+    # skills are foregrounded" is exactly what the rules permit.
+    #
+    # Without this the validator rejected `Chained an LLM query path` on an ARC
+    # bullet while four other ARC bullets say LLM — which is not a fabrication,
+    # it is the tailoring the tailor exists to do. Three consecutive real
+    # packet builds died this way, and the only output that survived was
+    # near-verbatim, which is untailored by definition.
+    #
+    # What stays forbidden is unchanged and is the case that matters: a name
+    # from a *different* parent, or from nowhere in the corpus at all. Grafana
+    # on a bullet from the role that never touched Grafana is still an invention.
+    sibling_text: dict[tuple[str, int], list[str]] = {}
+    bullets = queries.corpus_bullets(conn)
+    for row in bullets:
+        key = ("e", int(row["experience_id"])) if row["experience_id"] is not None \
+            else ("p", int(row["project_id"]))
+        sibling_text.setdefault(key, []).append(str(row["text"]))
+
     context: dict[int, str] = {}
-    for row in queries.corpus_bullets(conn):
-        parent = (
-            experience_context.get(int(row["experience_id"]), "")
-            if row["experience_id"] is not None
-            else project_context.get(int(row["project_id"]), "")
-        )
+    for row in bullets:
+        if row["experience_id"] is not None:
+            key = ("e", int(row["experience_id"]))
+            parent = experience_context.get(key[1], "")
+        else:
+            key = ("p", int(row["project_id"]))
+            parent = project_context.get(key[1], "")
         own_skills = ""
         if row["skills"]:
             try:
                 own_skills = " ".join(str(item) for item in json.loads(row["skills"]))
             except json.JSONDecodeError:
                 pass
-        context[int(row["id"])] = f"{parent} {own_skills}"
+        siblings = " ".join(sibling_text.get(key, ()))
+        context[int(row["id"])] = f"{parent} {own_skills} {siblings}"
     return context
 
 
@@ -782,7 +811,10 @@ def build_packet(conn: sqlite3.Connection, application_id: int) -> dict[str, Any
         )
 
     result = tailor(conn, jd, limit=10, application_id=application_id)
-    document = resume.build_document(conn, selection=result.selection())
+    # The JD reaches the renderer too, not only the model: it decides which 22 of
+    # ~50 technologies survive the Skills cut. Without it a keyword screen sees
+    # 3Dmol.js where it should see React.
+    document = resume.build_document(conn, selection=result.selection(), jd_text=jd)
     # Never a company name in the filename — CLAUDE.local.md, Discretion.
     out_path = config.OUT_DIR / f"packet_{application_id}.pdf"
     resume.render(document, Path(out_path))
@@ -890,7 +922,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import resume
 
         path = resume.render(
-            resume.build_document(conn, selection=result.selection()), Path(args.pdf)
+            resume.build_document(conn, selection=result.selection(), jd_text=jd_text),
+            Path(args.pdf),
         )
         print(f"\n{path}")
     conn.close()
