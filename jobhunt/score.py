@@ -52,27 +52,6 @@ class ScoreError(RuntimeError):
     """Scoring could not run, or the model's reply was unusable."""
 
 
-_SYSTEM = """You score how well one job posting fits one candidate. \
-You are ordering a shortlist, not making a decision — the candidate reviews \
-every posting you pass and submits every application by hand.
-
-Return ONLY a JSON object, no prose:
-{"score": <integer 0-100>, "reason": "<one sentence, under 25 words>"}
-
-Score on fit to the candidate's actual background: the technologies they have \
-shipped, the kind of work they have done, and the level implied by the posting.
-
-Do NOT score on compensation — the candidate does not filter on it.
-Do NOT score on location — that is ranked separately and never rejects.
-Do NOT penalise a posting for a short or vague description; judge what is there.
-
-Calibration, because a scorer that puts everything at 70 has ordered nothing:
-  85-100  squarely this candidate's work — the stack and the level both match
-  60-84   plausible: adjacent stack, or right stack at a slightly off level
-  30-59   a stretch — same field, little overlap in what they have built
-   0-29   wrong discipline, or a level far from theirs"""
-
-
 @dataclass
 class Scored:
     application_id: int
@@ -237,12 +216,15 @@ def score_batch(
     llm.rate(model)  # refuse before spending, not after logging $0
     prefix = _profile_prefix(conn)
 
+    # Read once for the whole batch rather than per request: a mid-submission
+    # edit would otherwise split one batch across two prompt revisions.
+    instructions = llm.system_prompt("score")
     system: list[dict[str, Any]] = [{"type": "text", "text": prefix}]
     if settings.get("cache_profile"):
         # Byte-identical across every request in the batch and across every run
         # this month. This is the lever CLAUDE.md ranks first.
         system[0]["cache_control"] = {"type": "ephemeral"}
-    system.append({"type": "text", "text": _SYSTEM})
+    system.append({"type": "text", "text": instructions})
 
     # Kept so results can be logged with the prompt that produced them.
     # `llm_calls.prompt` is NOT NULL, and CLAUDE.md asks for the prompt on every
@@ -290,7 +272,7 @@ def score_batch(
         time.sleep(BATCH_POLL_SECONDS)
 
     return apply_batch(conn, batch.id, model=model, prompts=prompts,
-                       submitted=len(requests))
+                       submitted=len(requests), system_sha=llm.prompt_sha(instructions))
 
 
 def apply_batch(
@@ -300,6 +282,7 @@ def apply_batch(
     model: str | None = None,
     prompts: dict[str, str] | None = None,
     submitted: int | None = None,
+    system_sha: str | None = None,
 ) -> dict[str, int]:
     """Apply the results of an already-submitted batch.
 
@@ -307,6 +290,11 @@ def apply_batch(
     has already been paid for. Idempotent by way of the state machine: a row
     already moved out of `discovered` raises InvalidTransition and is counted as
     skipped rather than scored twice.
+
+    `system_sha` comes from the submitting call. Recomputing it here from the
+    current file would be a lie for a batch recovered by `--batch-id` days
+    later: the prompt may have been edited since, and the results would be
+    attributed to wording that never ran. NULL is the honest answer.
     """
     import anthropic
 
@@ -338,13 +326,13 @@ def apply_batch(
             continue
         counts["scored"] += 1
         _log_batch_call(conn, model, application_id, message,
-                        prompts.get(str(entry.custom_id), ""))
+                        prompts.get(str(entry.custom_id), ""), system_sha)
     return counts
 
 
 def _log_batch_call(
     conn: sqlite3.Connection, model: str, application_id: int, message: Any,
-    prompt: str = "",
+    prompt: str = "", system_sha: str | None = None,
 ) -> None:
     """`llm_calls` row per batch result. CLAUDE.md wants every call logged.
 
@@ -358,8 +346,8 @@ def _log_batch_call(
             """
             INSERT INTO llm_calls (task, model, application_id, prompt, response,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-                cost_usd, latency_ms, error, stop_reason, called_at)
-            VALUES ('score', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                cost_usd, latency_ms, error, stop_reason, system_sha, called_at)
+            VALUES ('score', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
             """,
             (
                 model,
@@ -379,6 +367,7 @@ def _log_batch_call(
                 getattr(usage, "cache_creation_input_tokens", None) if usage else None,
                 llm._cost(model, usage) * 0.5 if usage else None,
                 getattr(message, "stop_reason", None),
+                system_sha,
                 config.utcnow(),
             ),
         )
@@ -398,7 +387,6 @@ def score_one(conn: sqlite3.Connection, row: sqlite3.Row) -> Scored:
         "score",
         _posting_prompt(row),
         conn=conn,
-        system=_SYSTEM,
         cached=prefix,
         application_id=int(row["application_id"]),
     )

@@ -1,0 +1,26 @@
+-- Record which system prompt produced each call.
+--
+-- Task instructions moved out of the workers into `config/prompts/<task>.md`,
+-- which is the point — prompt wording is the thing most worth iterating on. But
+-- an editable prompt with no record of which revision ran makes `llm_calls`
+-- un-attributable: a week of tailor output at varying quality, and no way to
+-- tell an edit's effect from the model's variance. That is exactly the question
+-- the table exists to answer.
+--
+-- Twelve hex chars of sha256 over the prompt text as sent. The prompts are
+-- git-tracked, so the hash is a join key back to a revision, not a backup:
+--
+--   SELECT system_sha, COUNT(*), ROUND(AVG(cost_usd), 4)
+--     FROM llm_calls WHERE task = 'tailor' GROUP BY 1 ORDER BY MIN(called_at);
+--
+-- Only the task prompt is hashed, not the cached profile corpus prefixed to it.
+-- The corpus is versioned in `docs/profile/` where its edits are already
+-- visible, and folding both into one hash would mean a corpus edit looked like
+-- a prompt edit.
+--
+-- NULL is meaningful in two places: rows written before this column existed,
+-- and batch results recovered by `--batch-id` in a later process, where the
+-- submitting sha is gone and recomputing it from the current file would
+-- attribute results to wording that never ran.
+
+ALTER TABLE llm_calls ADD COLUMN system_sha TEXT;  -- sha256[:12] of the task prompt

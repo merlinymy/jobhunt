@@ -31,6 +31,7 @@ DB_PATH = Path(os.environ.get("JOBHUNT_DB") or REPO_ROOT / "jobhunt.db").expandu
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
 PROFILE_DIR = REPO_ROOT / "docs" / "profile"
 MODELS_YAML = REPO_ROOT / "config" / "models.yaml"
+PROMPTS_DIR = REPO_ROOT / "config" / "prompts"
 OUT_DIR = REPO_ROOT / "out"
 
 HOST = os.environ.get("JOBHUNT_HOST", "127.0.0.1")

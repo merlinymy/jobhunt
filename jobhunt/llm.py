@@ -4,6 +4,10 @@
 `config/models.yaml` and nowhere else — never a model ID at a call site — so
 swapping tiers, or adding an Ollama backend later, is a config change.
 
+The same holds for the instructions: a task's system prompt is
+`config/prompts/<task>.md`, not a constant in the worker. Prompt wording is the
+thing most worth iterating on and the thing least worth a code change to edit.
+
 Every call writes an `llm_calls` row: prompt, response, token counts, cost, and
 latency, on success and on failure both. Cost is reconstructed from the token
 counts and the rates in models.yaml, because the API does not return a price.
@@ -15,8 +19,10 @@ a cache-control'd system block.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import time
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -52,6 +58,51 @@ def task_config(task: str) -> dict[str, Any]:
             f"Known tasks: {sorted(tasks)}"
         )
     return tasks[task]
+
+
+def prompt_path(task: str) -> Path:
+    """Where `task`'s system prompt lives. `config/prompts/<task>.md` by default.
+
+    `tasks.<task>.system_prompt` in models.yaml overrides it, relative to
+    `config/`, so two tasks can share one file without a copy going stale.
+    """
+    override = task_config(task).get("system_prompt")
+    if override:
+        return config.MODELS_YAML.parent / str(override)
+    return config.PROMPTS_DIR / f"{task}.md"
+
+
+def system_prompt(task: str) -> str:
+    """`task`'s system prompt, read fresh.
+
+    Deliberately not memoized. Prompt wording is what you iterate on, and a
+    cached copy would mean restarting the dashboard between edits — one 4 KB
+    read against a call that takes seconds is not a cost worth optimizing.
+    """
+    path = prompt_path(task)
+    if not path.exists():
+        raise LLMError(
+            f"no system prompt for task {task!r}: expected {path}. Create it, or "
+            f"point `tasks.{task}.system_prompt` in {config.MODELS_YAML.name} at "
+            f"an existing file. See config/prompts/README.md."
+        )
+    text = path.read_text().strip()
+    if not text:
+        # An empty system block is accepted by the API and quietly produces
+        # markedly worse output — the kind of regression that gets blamed on the
+        # model. Refuse instead: a truncated save is the likeliest cause.
+        raise LLMError(f"{path} is empty. A blank system prompt is never intended.")
+    return text
+
+
+def prompt_sha(text: str) -> str:
+    """Short content hash, logged so output can be traced to a prompt revision.
+
+    Prompts are editable and git-tracked; this is the join between a row in
+    `llm_calls` and the wording that produced it. Twelve hex chars is ample for
+    telling a handful of revisions apart.
+    """
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def rate(model: str) -> tuple[float, float]:
@@ -103,6 +154,7 @@ def _log(
     latency_ms: int | None = None,
     error: str | None = None,
     stop_reason: str | None = None,
+    system_sha: str | None = None,
 ) -> None:
     if conn is None:
         return
@@ -112,8 +164,8 @@ def _log(
             INSERT INTO llm_calls (
               task, model, application_id, prompt, response,
               input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-              cost_usd, latency_ms, error, stop_reason, called_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              cost_usd, latency_ms, error, stop_reason, system_sha, called_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task,
@@ -140,6 +192,7 @@ def _log(
                 latency_ms,
                 error,
                 stop_reason,
+                system_sha,
                 config.utcnow(),
             ),
         )
@@ -157,6 +210,10 @@ def complete(
 ) -> str:
     """Run `task`'s model over `prompt` and return the text.
 
+    `system` defaults to `config/prompts/<task>.md`. Pass it only to override
+    that file for one call; workers should not, or the file stops being the
+    place a prompt is edited.
+
     `cached` is the byte-identical prefix — the profile corpus — sent as a
     cache-control'd system block so repeat calls bill it at a tenth.
 
@@ -171,6 +228,8 @@ def complete(
     if not model:
         raise LLMError(f"task {task!r} has no `model` in {config.MODELS_YAML.name}")
     rate(model)  # fail before spending money, not after logging the spend as $0
+    system = system if system is not None else system_prompt(task)
+    sha = prompt_sha(system)
 
     try:
         import anthropic
@@ -208,6 +267,7 @@ def complete(
             application_id=application_id,
             latency_ms=int((time.monotonic() - started) * 1000),
             error=f"{type(exc).__name__}: {exc}",
+            system_sha=sha,
         )
         raise LLMError(f"{task} call failed: {exc}") from exc
 
@@ -225,6 +285,7 @@ def complete(
         usage=message.usage,
         latency_ms=latency_ms,
         stop_reason=message.stop_reason,
+        system_sha=sha,
     )
 
     # Without this, a truncated reply reaches the caller as a half-written string
@@ -243,3 +304,25 @@ def complete(
             f"Nothing usable was returned."
         )
     return text
+
+
+def main() -> None:
+    """`python -m jobhunt.llm` — what every task is routed to right now.
+
+    The shas are the ones written to `llm_calls.system_sha`, so a row from last
+    week can be matched to the wording that produced it.
+    """
+    for task in sorted(routing().get("tasks") or {}):
+        settings = task_config(task)
+        path = prompt_path(task)
+        try:
+            sha = prompt_sha(system_prompt(task))
+        except LLMError:
+            sha = "-- missing --"
+        root = config.REPO_ROOT
+        rel = path.relative_to(root) if path.is_relative_to(root) else path
+        print(f"{task:<16} {settings.get('model', '?'):<28} {sha:<14} {rel}")
+
+
+if __name__ == "__main__":
+    main()

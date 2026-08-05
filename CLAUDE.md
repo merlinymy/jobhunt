@@ -75,6 +75,12 @@ Model per task lives in `config/models.yaml`. **Never hardcode a model ID at a c
 All calls go through one `llm.py` with a `complete(task, prompt)` signature, so swapping
 tiers — or adding an Ollama backend later — is a config change, not a refactor.
 
+Same rule for the wording: a task's system prompt is `config/prompts/<task>.md`, never a
+constant in the worker. Re-read on every call, so editing one needs no restart. `llm.py`
+logs its sha to `llm_calls.system_sha` — that column is how output quality gets attributed
+to a revision. `config/prompts/README.md` records which instructions the validator and the
+response parsers depend on; those are not free text.
+
 Cost levers in order of real impact: prompt caching first (the profile corpus is
 byte-identical across every call), then the Batch API for scoring, then model tier last.
 
