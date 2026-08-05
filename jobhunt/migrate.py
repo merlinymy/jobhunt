@@ -87,7 +87,15 @@ def apply(conn: sqlite3.Connection, path: Path) -> None:
 
 
 def main() -> int:
-    conn = connect()
+    # The only caller that may create a database. Everything else opens `mode=rw`
+    # and raises, so a mistyped path or an unmounted disk can never quietly
+    # become an empty second database that then diverges from the real one.
+    fresh = not config.DB_PATH.expanduser().is_file()
+    conn = connect(create=True)
+    if fresh:
+        # Loud, because the common cause is a wrong JOBHUNT_DB rather than an
+        # actual first run, and the symptom otherwise is "where did my data go".
+        print(f"creating a new database at {config.DB_PATH}", file=sys.stderr)
     todo = pending(conn)
     if not todo:
         print(f"up to date — {config.DB_PATH}")

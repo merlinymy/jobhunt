@@ -3,10 +3,14 @@
   The dashboard, always on. docs/architecture.md: the mini holds the DB, the
   timers, and this.
 
-  Binds to 127.0.0.1 only — `jobhunt.web.app.run_dev` refuses anything else, so
-  this cannot be widened by editing the plist. Reaching it from a laptop or a
-  phone is Tailscale to this port, never a wider bind address.
+  Binds to 127.0.0.1 only — `jobhunt.web.app._assert_loopback` refuses anything
+  else, so this cannot be widened by editing the plist. Reaching it from a laptop
+  or a phone is Tailscale Serve in front of this port, never a wider bind address.
+
+  No --reload here. That flag belongs to `make dev`; under KeepAlive it forks a
+  supervisor launchd does not supervise and stat-polls the repo forever.
 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -17,6 +21,11 @@
     <string>__REPO__/.venv/bin/python</string>
     <string>-m</string>
     <string>jobhunt.web.app</string>
+    <!-- The SSD may mount after login. Wait rather than crash: KeepAlive would
+         otherwise respawn a traceback every ThrottleInterval until someone
+         noticed. This process sleeps and picks the disk up on its own. -->
+    <string>--wait-for-db</string>
+    <string>600</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -24,10 +33,15 @@
 
   <key>EnvironmentVariables</key>
   <dict>
+    <!-- launchd gives a minimal PATH. rendercv shells out to typst, and the
+         venv's bin has to come first. JOBHUNT_DB is deliberately NOT set here:
+         a plist value beats .env (config._load_env uses setdefault), so a stale
+         install would silently pin the agents to a different database than the
+         one `make` uses. .env is the single source. -->
     <key>PATH</key>
     <string>__REPO__/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <key>JOBHUNT_DB</key>
-    <string>__DB__</string>
+    <key>JOBHUNT_LOG_DIR</key>
+    <string>__LOGS__</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -41,9 +55,22 @@
   <key>ThrottleInterval</key>
   <integer>30</integer>
 
+  <!-- Interactive keeps App Nap and the background scheduler away from a server
+       whose whole job is answering a click quickly. -->
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <!-- Room for uvicorn's timeout_graceful_shutdown=10 before SIGKILL. -->
+  <key>ExitTimeOut</key>
+  <integer>20</integer>
+
+  <!-- Crash-catcher only. launchd holds this fd for the life of the process, so
+       nothing can rotate it; the server logs through its own RotatingFileHandler
+       to dashboard.log instead. This file should stay near-empty — if it grows,
+       something is dying before logging is configured. -->
   <key>StandardOutPath</key>
-  <string>__LOGS__/dashboard.log</string>
+  <string>__LOGS__/dashboard.launchd.log</string>
   <key>StandardErrorPath</key>
-  <string>__LOGS__/dashboard.log</string>
+  <string>__LOGS__/dashboard.launchd.log</string>
 </dict>
 </plist>

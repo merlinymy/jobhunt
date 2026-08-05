@@ -11,6 +11,7 @@
   and every `launchctl load`, which is both rude to Indeed and a good way to
   test a config change by accident.
 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -29,12 +30,15 @@
   <dict>
     <!-- launchd gives a minimal PATH. rendercv shells out to typst, and the
          venv's bin has to come first. -->
+    <!-- launchd gives a minimal PATH. rendercv shells out to typst, and the
+         venv's bin has to come first. JOBHUNT_DB is deliberately NOT set here:
+         a plist value beats .env (config._load_env uses setdefault), so a stale
+         install would silently pin the agents to a different database than the
+         one `make` uses. .env is the single source. -->
     <key>PATH</key>
     <string>__REPO__/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <!-- Explicit rather than relying on config.py's default. If the repo ever
-         moves, a wrong DB path should fail loudly, not quietly open a new one. -->
-    <key>JOBHUNT_DB</key>
-    <string>__DB__</string>
+    <key>JOBHUNT_LOG_DIR</key>
+    <string>__LOGS__</string>
   </dict>
 
   <key>StartCalendarInterval</key>
@@ -52,8 +56,8 @@
   <string>Background</string>
 
   <key>StandardOutPath</key>
-  <string>__LOGS__/discover.log</string>
+  <string>__LOGS__/discover.launchd.log</string>
   <key>StandardErrorPath</key>
-  <string>__LOGS__/discover.log</string>
+  <string>__LOGS__/discover.launchd.log</string>
 </dict>
 </plist>

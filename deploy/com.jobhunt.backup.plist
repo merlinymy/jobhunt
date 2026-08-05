@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Nightly snapshot of the database to the internal disk.
+
+  03:30: after any evening work has committed, before the 06:30 discovery run
+  starts writing. The DB lives on an external disk and holds the exact bytes of
+  every resume actually submitted — the one thing here that cannot be rebuilt
+  from current templates or re-scraped.
+
+  RunAtLoad is false. A backup on every login is noise, and the agent that
+  matters is the scheduled one.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobhunt.backup</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/deploy/backup.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- No JOBHUNT_DB here, deliberately: a plist value beats .env, so a stale
+         install would back up a different database than the one in use. -->
+    <key>PATH</key>
+    <string>__REPO__/.venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>JOBHUNT_LOG_DIR</key>
+    <string>__LOGS__</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- Copying 15 MB and reading every page of it should never be what makes the
+       machine feel slow. -->
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>5</integer>
+
+  <key>StandardOutPath</key>
+  <string>__LOGS__/backup.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOGS__/backup.launchd.log</string>
+</dict>
+</plist>

@@ -5,43 +5,38 @@
 # genuinely depends on `ingest` having finished — staggering two agents by an
 # hour and hoping is the kind of thing that works until Indeed is slow one
 # morning. Here the dependency is `&&`.
-#
-# Runs under launchd, which means: no shell profile, a minimal PATH, and no
-# terminal. Everything is absolute, and both streams go to the log.
 
 set -o pipefail
 
-REPO="__REPO__"
-PY="$REPO/.venv/bin/python"
-LOG_DIR="$HOME/Library/Logs/jobhunt"
+# shellcheck source=deploy/_common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
+jh_log_setup discover
 
-mkdir -p "$LOG_DIR"
-cd "$REPO" 2>/dev/null || { echo "$(date -u +%FT%TZ) repo missing: $REPO"; exit 1; }
+cd "$JH_REPO" || { echo "$(jh_stamp) repo missing: $JH_REPO"; exit 1; }
 
-stamp() { date -u +%FT%TZ; }
+echo "===== $(jh_stamp) discovery run starting ====="
 
-echo "===== $(stamp) discovery run starting ====="
+# A missed run is a bad morning. A run against a decoy database is a corrupted
+# history, so this gate is not optional — and it exits 0, because an unplugged
+# disk is not a broken install and should not paint the agent red forever.
+if ! jh_require_db "${JOBHUNT_WAIT_DB:-120}"; then
+  echo "$(jh_stamp) database unavailable, skipping this run"
+  echo "===== $(jh_stamp) done (skipped) ====="
+  exit 0
+fi
 
 # Ingest is the one that can be refused by Indeed. It exits 0 even when the
 # scrape aborts early — the board poll is a separate source and still ran — so
 # score follows regardless, and the reason is in the log above it.
-echo "--- $(stamp) ingest"
-"$PY" -m jobhunt.ingest
+echo "--- $(jh_stamp) ingest"
+"$JH_PY" -m jobhunt.ingest
 ingest_status=$?
 
-echo "--- $(stamp) score"
-"$PY" -m jobhunt.score
+echo "--- $(jh_stamp) score"
+"$JH_PY" -m jobhunt.score
 score_status=$?
 
-echo "===== $(stamp) done (ingest=$ingest_status score=$score_status) ====="
-
-# Keep the log from growing without bound. launchd has no rotation of its own,
-# and a run a day appending forever is a slow leak nobody notices until the disk
-# is full. Truncate to the most recent 5000 lines after each run.
-LOG="$LOG_DIR/discover.log"
-if [ -f "$LOG" ] && [ "$(wc -l < "$LOG")" -gt 5000 ]; then
-  tail -n 5000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-fi
+echo "===== $(jh_stamp) done (ingest=$ingest_status score=$score_status) ====="
 
 # Non-zero only if both failed. One dead source is a bad morning, not a broken
 # install, and a red agent in every log for a week trains you to ignore it.

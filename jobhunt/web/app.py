@@ -1,9 +1,10 @@
 """FastAPI + Jinja + HTMX dashboard.
 
-Localhost only. Cross-machine and phone access is Tailscale to this port, never a
-wider bind address. This is the whole interface: review and approve, tailor,
-fill, and track. There is no second surface — the Telegram digest was removed in
-favour of a pull queue on `/review`.
+Localhost only. Cross-machine and phone access is Tailscale Serve in front of
+this port, never a wider bind address — `serve()` refuses anything that is not
+loopback. This is the whole interface: review and approve, tailor, fill, and
+track. There is no second surface — the Telegram digest was removed in favour of
+a pull queue on `/review`.
 """
 
 from __future__ import annotations
@@ -50,6 +51,26 @@ app = FastAPI(title="jobhunt", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 
 
+@app.middleware("http")
+async def same_site_only(request: Request, call_next):
+    """Reject cross-site writes.
+
+    There is no auth and no CSRF token here, and the loopback bind was doing all
+    the work: any page open in this machine's browser could POST to
+    127.0.0.1:8000 and approve, skip, or transition something. Serve keeps the
+    port off the wider network, but not away from a local browser tab.
+
+    `None` is allowed through so curl, the launchd smoke checks, and anything
+    without fetch metadata keep working — this raises the floor, it is not a
+    boundary to rely on.
+    """
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        site = request.headers.get("sec-fetch-site")
+        if site is not None and site not in ("same-origin", "same-site", "none"):
+            return PlainTextResponse("cross-site request refused", status_code=403)
+    return await call_next(request)
+
+
 @app.exception_handler(HTTPException)
 def htmx_aware_http_exception(request: Request, exc: HTTPException) -> Response:
     """Plain text for HTMX, FastAPI's JSON for everything else.
@@ -64,6 +85,18 @@ def htmx_aware_http_exception(request: Request, exc: HTTPException) -> Response:
     return JSONResponse(
         {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
     )
+
+
+@app.exception_handler(db.DatabaseLocationError)
+def database_unavailable(request: Request, exc: db.DatabaseLocationError) -> Response:
+    """503 with the reason, rather than a 500 and a traceback in the log.
+
+    The disk can go away under a running dashboard — a knocked cable is the
+    likely one — and every request then fails inside `get_conn`. Being told
+    "the external disk is not mounted" from a phone is the difference between
+    a thirty-second fix and assuming the app is broken.
+    """
+    return PlainTextResponse(str(exc).split("\n")[0], status_code=503)
 
 
 def get_conn():
@@ -1215,20 +1248,87 @@ def set_theme(
     return response
 
 
-def run_dev() -> None:
-    """`make dev`. Refuses to bind anywhere but loopback."""
-    import ipaddress
+def _assert_loopback(host: str) -> None:
+    """Refuse to bind anywhere but loopback.
 
+    This guard is what makes Tailscale Serve safe: Serve terminates TLS on the
+    tailnet and dials 127.0.0.1 from this machine, so the port being unreachable
+    any other way is the entire access control story. There is no auth here.
+
+    Resolves hostnames rather than only accepting literals — the old version
+    called `ipaddress.ip_address` directly, so `JOBHUNT_HOST=localhost` died with
+    a bare ValueError instead of working.
+    """
+    import ipaddress
+    import socket
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as exc:
+            raise RuntimeError(f"JOBHUNT_HOST={host!r} does not resolve") from exc
+        addresses = [ipaddress.ip_address(info[4][0]) for info in infos]
+    if not addresses or not all(address.is_loopback for address in addresses):
+        raise RuntimeError(
+            f"refusing to bind {host!r}: the dashboard is loopback only. Reach it "
+            "from other machines over Tailscale Serve, which proxies to this port."
+        )
+
+
+def serve(*, reload: bool = False, wait_for_db: float = 0.0) -> None:
+    """Run the dashboard. Production by default; `--reload` is the opt-in.
+
+    `reload` used to be hardcoded on, and the launchd agent ran this same
+    function — so the always-on dashboard was running uvicorn's dev auto-reloader
+    with `watchfiles` not installed, meaning a stat-poll of the whole repo every
+    quarter second, two processes, and a restart mid-request on any `git pull`.
+    The default is now the safe one: forgetting the flag gets you production.
+    """
     import uvicorn
 
-    address = ipaddress.ip_address(config.HOST)
-    if not address.is_loopback:
-        raise RuntimeError(
-            f"refusing to bind {config.HOST}: the dashboard is loopback only. "
-            "Reach it from other machines over Tailscale."
-        )
-    uvicorn.run("jobhunt.web.app:app", host=config.HOST, port=config.PORT, reload=True)
+    from .. import doctor
+    from . import logconf
+
+    _assert_loopback(config.HOST)
+    if wait_for_db:
+        # KeepAlive is a plain true, so without this an unmounted disk at login
+        # means a traceback every ThrottleInterval forever. One sleeper instead,
+        # which comes back on its own the moment the volume appears.
+        doctor.wait_for_db(wait_for_db)
+    uvicorn.run(
+        "jobhunt.web.app:app",
+        host=config.HOST,
+        port=config.PORT,
+        reload=reload,
+        # The reloader wants the console; a daemon wants its own rotating file.
+        log_config=None if reload else logconf.dict_config(),
+        # Tailscale Serve sets X-Forwarded-*; trust it only from the local proxy.
+        proxy_headers=True,
+        forwarded_allow_ips="127.0.0.1",
+        timeout_graceful_shutdown=10,
+        server_header=False,
+    )
+
+
+def run_dev() -> None:
+    """`make dev`. Auto-reload; never what the launchd agent runs."""
+    serve(reload=True)
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="run the jobhunt dashboard")
+    parser.add_argument("--reload", action="store_true", help="dev auto-reload")
+    parser.add_argument(
+        "--wait-for-db", type=float, default=0.0, metavar="SECONDS",
+        help="wait for the database volume before binding (launchd uses this)",
+    )
+    args = parser.parse_args(argv)
+    serve(reload=args.reload, wait_for_db=args.wait_for_db)
 
 
 if __name__ == "__main__":
-    run_dev()
+    main()

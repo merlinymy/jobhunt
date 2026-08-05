@@ -34,6 +34,15 @@ MODELS_YAML = REPO_ROOT / "config" / "models.yaml"
 PROMPTS_DIR = REPO_ROOT / "config" / "prompts"
 OUT_DIR = REPO_ROOT / "out"
 
+# Both on the internal disk, deliberately. Backups on the same volume as the DB
+# protect against nothing, and logs have to be writable when that volume is gone
+# — an agent that cannot say why it did nothing is worse than one that failed.
+BACKUP_DIR = Path(
+    os.environ.get("JOBHUNT_BACKUP_DIR")
+    or "~/Library/Application Support/jobhunt/backups"
+).expanduser()
+LOG_DIR = Path(os.environ.get("JOBHUNT_LOG_DIR") or "~/Library/Logs/jobhunt").expanduser()
+
 HOST = os.environ.get("JOBHUNT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("JOBHUNT_PORT", "8000"))
 
