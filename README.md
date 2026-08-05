@@ -22,7 +22,7 @@ Phase 1 is done. Phase 2 is next and is gated on my own data entry, not on code.
 | 1 | DB, state machine, dashboard | **done** — backfill of hand-submitted applications still pending |
 | 2 | Profile store, resume tailoring | next — needs `docs/profile/experience.yaml` filled |
 | 3 | Answer bank, chat intake | not started |
-| 4 | Discovery, scoring, review queue | ingest, prefilter, scoring and `/review` done; launchd pending |
+| 4 | Discovery, scoring, review queue | done, agents verified on a stand-in volume |
 | 5 | Gmail inbox poller | not started |
 
 Only two commands are implemented so far. The rest are declared in the `Makefile` as the
@@ -130,8 +130,11 @@ These raise at runtime rather than living only in a document:
 
 - **The DB may not sit in a sync folder.** WAL plus file-level sync corrupts SQLite, so
   `db.connect()` refuses any path under iCloud Drive, Dropbox, Google Drive, or OneDrive.
-- **The dashboard binds loopback only.** Cross-machine and phone access is Tailscale to the
-  mini's port. `run_dev()` raises on anything that isn't a loopback address.
+- **Only `make migrate` may create a database.** An unmounted `/Volumes` path is still a
+  writable path on the boot volume, so every other caller opens `mode=rw` behind an
+  `ismount` check and a volume sentinel, and raises rather than starting a decoy.
+- **The dashboard binds loopback only.** Cross-machine and phone access is Tailscale Serve
+  in front of that port. `serve()` raises on anything that isn't a loopback address.
 - **An applied migration may not change.** `migrate.py` stores each file's sha256 and raises if
   it differs; add the next numbered file instead.
 - **Illegal state transitions are rejected**, and `log_event()` refuses to forge a
@@ -141,10 +144,12 @@ These raise at runtime rather than living only in a document:
 
 ## Machines
 
-Three Macs, one host. Only the **Mac mini** runs the app — it holds the database, the launchd
-jobs, and the dashboard, with sleep disabled so the scheduled runs fire. The laptops are dev
-clients: edit code and profile data, push through git, and reach the dashboard over Tailscale.
-Profile data syncs via git, never through the database.
+Three Macs, one host. Only the **Mac mini** runs the app — the repo on its internal disk, the
+database on an external encrypted SSD, three launchd agents (discovery, dashboard, backup),
+and sleep disabled so the scheduled runs fire. The laptops are dev clients: edit code and
+profile data, push through git, and reach the dashboard over Tailscale Serve at
+`https://jobhunt-mini.<tailnet>.ts.net`. Profile data syncs via git, never through the
+database. `make doctor` says whether the host is healthy.
 
 ## Tests
 

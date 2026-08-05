@@ -204,19 +204,68 @@ The tedium worth automating turned out to be the answer bank, not the clicking.
 
 Three dev machines, one host.
 
-- **Mac mini (24 GB)** — the only machine that runs the app. Holds `jobhunt.db`, the launchd
-  timers, and the dashboard. Always on, sleep disabled. Agents live in `deploy/` and are
-  installed with `make install-agents`, which refuses to proceed without confirming this is
-  the mini.
+- **Mac mini (24 GB)** — the only machine that runs the app. Repo on the internal disk,
+  database on an external APFS-encrypted SSD at `/Volumes/jobhunt`. Always on, sleep disabled.
+  Three launchd agents live in `deploy/` and are installed with `make install-agents`, which
+  refuses to proceed without confirming this is the mini.
 - **Laptops (8 GB, 24 GB)** — dev clients. Clone the repo, edit code and `docs/profile/`,
-  push through git. To use the app, hit the mini's dashboard over Tailscale.
+  push through git. To use the app, open the mini's dashboard over Tailscale.
 
-Constraints that follow:
+The repo stays on the internal disk deliberately. If it lived on the SSD, launchd could not
+even exec the agents when that disk is absent, and you would get no log explaining why.
+
+### Agents
+
+| Agent | Schedule | Does |
+|---|---|---|
+| `com.jobhunt.discover` | 06:30, 18:30 | `discover.sh`: ingest, then score |
+| `com.jobhunt.dashboard` | always on | `serve()`, loopback, `KeepAlive` |
+| `com.jobhunt.backup` | 03:30 | `backup.sh`: snapshot, verify, prune; drill on Sundays |
+
+All three wait on `doctor --require-db` first. They diverge on what a missing disk means:
+discovery skips and exits 0 (an unplugged disk is not a broken install), backup exits 1 (the
+night the disk was unplugged is the night you want to have noticed), and the dashboard sleeps
+until it appears rather than crash-looping under `KeepAlive`.
+
+Each process owns its own log. launchd holds `StandardOutPath` open for the whole life of a
+job, so nothing external can rotate it — `discover.sh` used to `mv` its log aside and spend the
+rest of the day writing to an unlinked inode. The plists now point at small `*.launchd.log`
+crash-catchers that should stay near-empty.
+
+### Access
+
+The dashboard binds `127.0.0.1` and `serve()` raises on anything else. Reaching it from a
+laptop or phone is **Tailscale Serve**, which terminates TLS on the tailnet and dials the
+loopback port from the mini:
+
+```bash
+tailscale serve --bg --https=443 http://127.0.0.1:8000
+```
+
+The loopback bind is not an obstacle Serve works around — it is what makes Serve safe. There is
+no auth here; the port being unreachable any other way is the entire access-control story.
+`--bg` persists across reboots. Disable key expiry for the node, or it goes dark in 180 days.
+Never `tailscale funnel`: that is the open internet in front of an app holding a legal name,
+a phone number, and 345 other people's contact details.
+
+Serve's certificate is also what makes the Fill helper work off-box — `navigator.clipboard`
+needs a secure context, which `http://100.x.x.x:8000` is not.
+
+### Constraints that follow
 
 - **One writer.** The mini's process is the only thing that opens the DB file. Laptops go
   through HTTP. SQLite over a network share or a sync folder corrupts under WAL.
-- **No DB in git and no DB in iCloud.** It holds BLOBs of every submitted PDF. Back it up
-  off-box with a nightly copy, not by syncing the live file.
+- **Only `make migrate` creates a database.** An unmounted `/Volumes` path is still a
+  perfectly writable path on the boot volume, so opening one with the disk absent used to
+  create a decoy that then diverged from the real database. `db.connect()` checks `ismount`,
+  then a `.jobhunt-volume` sentinel against `JOBHUNT_DB_VOLUME_ID`, then opens `mode=rw`.
+- **`JOBHUNT_DB` never goes in a plist.** A plist value beats `.env`, so a stale install
+  silently pins the agents to a different database than `make` uses.
+- **No DB in git and no DB in iCloud.** It holds BLOBs of every submitted PDF. `backup.py`
+  takes a `VACUUM INTO` snapshot to the *internal* disk nightly, verifies it by reading every
+  page, keeps a grandfather-father-son set, and refuses to prune when a verify fails. A weekly
+  drill migrates a copy to prove a restore would actually work. The laptop pulls with `rsync`
+  over the tailnet.
 - **Profile data syncs via git**, which is the reason `docs/profile/` is committed rather than
   living only in the DB. Keep the repo private — those files contain my legal name, email,
   phone, city, pay expectations, full work history, and a contact network with other people's

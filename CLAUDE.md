@@ -22,6 +22,7 @@ Read on demand, not every session:
 
 - `docs/architecture.md` — state machine, components, algorithms, packet design
 - `docs/build-plan.md` — phases, gates, current status (check boxes off as work completes)
+- `docs/deploy-mini.md` — bringing the host up, in order, with what each step proves
 - `migrations/` — schema, source of truth
 - `config/models.yaml` — which model runs which task, and why
 - `docs/intake.md` — profile questionnaire; answers go in `docs/profile/`
@@ -99,7 +100,11 @@ make score         # prefilter + LLM scoring on `discovered`
 make tailor        # build packets for `job_approved`
 make inbox         # poll Gmail, classify, update states
 make chat          # gap-filling: resolve unknown_questions, append answers
-make install-agents # launchd timers for ingest+score and the dashboard — mini only
+make doctor        # is the deployment healthy: disk, schema, backups, extras, bind
+make backup        # snapshot the DB to the internal disk, verify, prune
+make test          # the table-driven suites (standalone scripts, not pytest)
+make install-agents # launchd timers for discovery, dashboard and backup — mini only
+make agents-stop   # unload them; do this before ejecting the SSD
 ```
 
 ## Conventions
@@ -118,17 +123,31 @@ I develop on three Macs (8 GB laptop, 24 GB laptop, 24 GB mini) but **only the M
 the app.** It holds the DB, the launchd jobs, and the dashboard. The laptops are dev clients.
 
 - **Never put the SQLite file on iCloud Drive, Dropbox, or any sync service.** WAL mode plus
-  file-level sync corrupts the database. The DB stays on the mini's local disk.
+  file-level sync corrupts the database. `db.connect()` refuses such a path.
+- **The DB lives on the mini's external SSD** (`/Volumes/jobhunt`, APFS, encrypted). An
+  unmounted `/Volumes` path is still a writable path on the boot volume, so `db.connect()`
+  checks `ismount`, then a `.jobhunt-volume` sentinel matched against `JOBHUNT_DB_VOLUME_ID`,
+  then opens `mode=rw` so SQLite itself cannot create. **Only `make migrate` may create a
+  database.** Everything else raises. Never add `JOBHUNT_DB` to a plist — a plist value beats
+  `.env` and silently splits the agents onto a second database.
 - **One writer host.** Laptops read and write through the mini's HTTP API over Tailscale,
   never by opening the DB file over a share. For local dev, use a throwaway seeded DB.
 - Profile data syncs between machines through git (`docs/profile/`), not through the DB.
   Keep this repo **private** — those files hold my legal name, email, phone, city, pay expectations,
   full work history, and a contact network with other people's names in it.
-- On the mini: launchd, not cron or systemd. Scheduled jobs need a logged-in GUI session.
-- Default Mac sleep silently kills the scheduled ingest and scoring runs:
-  `sudo pmset -a sleep 0 disablesleep 1`.
-- Never bind FastAPI beyond localhost. Cross-machine and phone access is Tailscale only.
-- SQLite in WAL mode. The DB holds every submitted PDF — back it up off-box nightly.
+- On the mini: launchd, not cron or systemd. Scheduled jobs need a logged-in GUI session, so
+  an unattended reboot with no auto-login brings nothing back — and leaves the encrypted SSD
+  locked as well.
+- Default Mac sleep silently kills the scheduled runs:
+  `sudo pmset -a sleep 0 disablesleep 1 disksleep 0 autorestart 1`.
+- Never bind FastAPI beyond localhost; `serve()` raises on anything else. Cross-machine and
+  phone access is **Tailscale Serve** in front of the loopback port, which also supplies the
+  HTTPS the Fill helper's clipboard needs. Never `tailscale funnel` — that is the open internet
+  in front of an app with no auth.
+- SQLite in WAL mode, `synchronous=FULL` on the mini because an external disk can be unplugged.
+  The DB holds every submitted PDF: `make backup` snapshots it to the internal disk nightly,
+  verifies by reading every page, and drills a restore weekly.
+- `make agents-stop` before ejecting the disk. `make doctor` answers "is this healthy".
 
 ## Watch for
 

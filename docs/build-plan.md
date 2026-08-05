@@ -183,13 +183,20 @@ rather than silently dropped.
       configure before it works.
 - [x] launchd agents in `deploy/`, installed with `make install-agents`.
       `com.jobhunt.discover` runs ingest then score at 06:30 and 18:30;
-      `com.jobhunt.dashboard` keeps the dashboard up. Written on the laptop,
+      `com.jobhunt.dashboard` keeps the dashboard up; `com.jobhunt.backup`
+      snapshots at 03:30. **These were ticked before they had ever run.**
+      `install.sh` templated `__REPO__` into the plists but not into
+      `discover.sh`, so every scheduled run died on `cd __REPO__` before
+      ingesting anything. Fixed 2026-08-05: the scripts self-locate, and all
+      three agents were installed, kickstarted and ejected-under-load against
+      an APFS disk image standing in for the SSD. Written on the laptop,
       **installed on the mini only** — the installer says so and asks before doing
       anything, because two machines running these means two scrapers, two scoring
       workers spending real money on the same rows, and two writers on one SQLite file.
 
-**Gate:** 8 jobs arrive in Telegram each weekday morning and ≥50% get
-`would_apply_anyway = 1`. Below that, tune the prefilter — not the LLM.
+**Gate:** 8 jobs are waiting in `/review` each weekday morning and ≥50% of the ones I
+submit get `would_apply_anyway = 1`. Below that, tune the prefilter — not the LLM.
+(Was "arrive in Telegram"; the digest was replaced by the pull queue above.)
 
 ### Open — soft dedup
 
