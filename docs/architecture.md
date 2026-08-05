@@ -51,7 +51,7 @@ helper should reject any pair not in the table above rather than trusting caller
 | `score` | after ingest | deterministic prefilter, then LLM scoring on survivors (batch) |
 | `tailor` | on `job_approved` | render resume PDF + resolve answer set → `packet_ready` |
 | `inbox` | launchd, hourly | Gmail API → classify → write events, close forgotten `applied` |
-| `dashboard` | always on | review queue, packet view, fill helper, "I applied", stats |
+| `dashboard` | always on | JSON API plus the React SPA: review queue, packet, fill, stats |
 | `load-profile` | on demand | import `docs/profile/*` into SQLite; idempotent upsert |
 | `chat` | on demand | gap-filling only — resolves `unknown_questions`, appends to `answers` |
 

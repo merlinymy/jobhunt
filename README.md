@@ -89,8 +89,15 @@ Full detail in [`docs/architecture.md`](docs/architecture.md); the schema in
 
 ## The dashboard
 
-Three pages, server-rendered with FastAPI + Jinja + HTMX. No build step, no bundler, no JS
-framework — htmx is vendored into `static/`, so it works offline.
+A React SPA over a JSON API: Vite, React 19, Tailwind 4, TypeScript, React Router and TanStack
+Query, served as static files by the same FastAPI process. One process on the host, no Node at
+runtime.
+
+It was server-rendered Jinja + HTMX until 2026-08-05, and the reason it changed was the phone:
+the review queue is worth working from anywhere, and five different data shapes had been forced
+into one `<table>`. Business logic did not move — `views.py` still decides what a page shows,
+`actions.py` what a button does, and the state vocabulary is served from `/api/meta` rather than
+hardcoded in TypeScript.
 
 - **Pipeline** — funnel counts, and the applications table with six composing filters (search,
   state, ATS, source, referral, would-apply-anyway) and eight sortable columns. Filters and

@@ -38,7 +38,10 @@ Read on demand, not every session:
 - **No account creation automation.** I create ATS accounts myself.
 - **No cloning or vendoring third-party job bots** — not AIHawk, Skyvern, browser-use, or
   Resume-Matcher. Four libraries plus our own code.
-- **No auth, no multi-user, no Docker, no cloud deploy, no SPA.**
+- **No auth, no multi-user, no Docker, no cloud deploy.** The dashboard *is* a React SPA
+  as of 2026-08-05 — that line used to say "no SPA", and the reason it changed is that the
+  review queue needed to work on a phone and five data shapes had been forced into one
+  `<table>`. Everything else on this list still holds.
 
 ## No test suite
 
@@ -94,7 +97,10 @@ Intended interface — build to this contract.
 ```bash
 make migrate       # apply migrations/*.sql in order
 make load-profile  # import docs/profile/* into SQLite; idempotent, re-runnable
-make dev           # dashboard on localhost:8000
+make dev           # API + built bundle on localhost:8000
+make dev-web       # Vite on 5173 proxying /api to 8000 — the frontend loop
+make build-web     # compile the React app into jobhunt/web/dist
+make check-web     # eslint + tsc
 make ingest        # one-shot discovery run
 make score         # prefilter + LLM scoring on `discovered`
 make tailor        # build packets for `job_approved`
@@ -110,7 +116,11 @@ make agents-stop   # unload them; do this before ejecting the SSD
 ## Conventions
 
 - Python 3.12, stdlib-first. `sqlite3` plus a thin query module. No ORM.
-- FastAPI + Jinja + HTMX. No build step, no bundler, no JS framework.
+- FastAPI serving a JSON API plus a React SPA. Vite 6, React 19, Tailwind 4, TypeScript,
+  React Router, TanStack Query. `make build-web` on the host; `dist/` is gitignored.
+- **Business logic stays in Python.** `views.py` decides what a page shows, `actions.py`
+  what a button does, `queries.py` holds the SQL. React is a view layer, and the state
+  vocabulary comes from `/api/meta` so it is never hardcoded in TypeScript.
 - Timestamps: ISO 8601 UTC, stored as TEXT.
 - Migrations: numbered `.sql` files, applied in order, never edited after they've been run.
 - Secrets in `.env`. Gitignore `.env`, `*.db`, `*.db-wal`, `*.db-shm`, `out/`.

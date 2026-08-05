@@ -9,8 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",         # dashboard
   "uvicorn>=0.30",          # dashboard server
-  "jinja2>=3.1",            # templates
-  "python-multipart>=0.0.9",# form posts
+  "pydantic>=2.7",          # request bodies on /api (a FastAPI dep already)
   "pyyaml>=6.0",            # docs/profile/*.yaml, config/models.yaml
 ]
 
