@@ -18,6 +18,7 @@ from typing import Annotated, Any
 from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -31,7 +32,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import answers, config, db, llm, queries, resume, states, tailor
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
-from . import views
+from . import api, views
 
 HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
@@ -50,6 +51,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="jobhunt", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+
+# Registered before any catch-all. Starlette matches in declaration order, so
+# ordering is the real guard and the prefix checks downstream are the backstop.
+app.include_router(api.router)
 
 
 @app.middleware("http")
@@ -73,19 +78,39 @@ async def same_site_only(request: Request, call_next):
 
 
 @app.exception_handler(HTTPException)
-def htmx_aware_http_exception(request: Request, exc: HTTPException) -> Response:
-    """Plain text for HTMX, FastAPI's JSON for everything else.
+def http_exception(request: Request, exc: HTTPException) -> Response:
+    """One error shape per client. Plain text for HTMX, `{"error": ...}` for the API.
 
     HTMX does not swap on a 4xx, so before this every rejected action — an
     illegal transition, a stale id — did nothing at all on screen: the button
     simply went dead. The banner in base.html shows this text; sending it as
-    JSON would put `{"detail": ...}` in front of me instead of the message.
+    JSON would put `{"detail": ...}` on screen instead of the message.
+
+    The API gets `error`, not FastAPI's `detail`, so the client has exactly one
+    field to read on every failure regardless of which layer raised it.
     """
     if request.headers.get("HX-Request"):
         return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"error": str(exc.detail)}, status_code=exc.status_code, headers=exc.headers
+        )
     return JSONResponse(
         {"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers
     )
+
+
+@app.exception_handler(RequestValidationError)
+def validation_error(request: Request, exc: RequestValidationError) -> Response:
+    """Pydantic's list of field errors, flattened to the one sentence to show."""
+    parts = []
+    for error in exc.errors():
+        location = ".".join(str(p) for p in error.get("loc", ()) if p != "body")
+        parts.append(f"{location}: {error.get('msg')}" if location else str(error.get("msg")))
+    message = "; ".join(parts) or "the request body was not valid"
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": message}, status_code=422)
+    return PlainTextResponse(message, status_code=422)
 
 
 @app.exception_handler(db.DatabaseLocationError)
