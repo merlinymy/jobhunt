@@ -71,8 +71,24 @@ when that disk is absent, and you would get no log saying why.
 cp .env.example .env
 ```
 
-Set `ANTHROPIC_API_KEY`. Leave `JOBHUNT_DB=/Volumes/jobhunt/jobhunt.db` and
-`JOBHUNT_SQLITE_SYNCHRONOUS=FULL` as they are. Leave `JOBHUNT_DB_VOLUME_ID` blank for now.
+Set `ANTHROPIC_API_KEY`. Then **uncomment these two lines** — they ship commented out,
+because the defaults are written for someone on a laptop with no external disk:
+
+```
+JOBHUNT_DB=/Volumes/jobhunt/jobhunt.db
+JOBHUNT_SQLITE_SYNCHRONOUS=FULL
+```
+
+Leave `JOBHUNT_DB_VOLUME_ID` blank; step 6 fills it in.
+
+**Miss the first line and this step fails silently rather than loudly.** The mini would run
+on a database in the repo on the internal disk — no error, no guard, since the guard only
+applies under `/Volumes` — and you would not find out until the SSD turned out to be empty.
+Confirm before continuing:
+
+```bash
+make doctor | grep database    # must say `on /Volumes/jobhunt`, not `on the boot volume`
+```
 
 ## 6. Stamp the volume
 

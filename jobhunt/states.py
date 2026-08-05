@@ -68,6 +68,17 @@ PIPELINE_ORDER = (
 # Reaching one of these is the first time a human at the company responded.
 RESPONSE_STATES = frozenset({REJECTED, INTERVIEW, OFFER})
 
+# States only reachable by actually submitting, read straight off TRANSITIONS:
+# APPLIED is entered from PACKET_READY or by manual backfill, and everything
+# reachable from APPLIED is in RESPONSE_STATES.
+#
+# PACKET_READY is deliberately NOT here even though those rows carry a rendered
+# `resume_pdf`. A built packet is reproducible — rerun `make tailor`. A submission
+# is not: nothing can regenerate the fact and date of it, or the exact bytes that
+# went to an employer. Anything asking "would losing this database lose something
+# real" wants this set, not `resume_pdf IS NOT NULL`.
+SUBMITTED_STATES = frozenset({APPLIED}) | RESPONSE_STATES
+
 EVENT_KINDS = frozenset({"state_change", "email_in", "note", "interview", "digest_sent"})
 
 

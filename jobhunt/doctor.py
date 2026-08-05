@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, db
+from . import config, db, queries, states
 
 # A backup older than this means the 03:30 agent has missed a night.
 STALE_BACKUP_HOURS = 36
@@ -135,13 +135,68 @@ def disk_space() -> Check:
     return Check("disk", worst_ok, ", ".join(parts))
 
 
+def _submitted_count() -> int | None:
+    """How many applications a lost database would take with it for good.
+
+    None means the question could not be answered. An unreadable database is
+    db_available's and db_integrity's failure to report, not this one's — but it
+    must not be reported as a zero, which would read as "nothing to lose".
+    """
+    try:
+        conn = db.connect()
+    except Exception:
+        return None
+    try:
+        counts = queries.state_counts(conn)
+    except Exception:
+        return None
+    finally:
+        conn.close()
+    return sum(n for state, n in counts.items() if state in states.SUBMITTED_STATES)
+
+
 def backups() -> Check:
+    # Never having taken a backup is a different condition from a backup regime
+    # that has broken, and they deserve different severities. A fresh install has
+    # no backup directory and does not need one yet — failing there trains people
+    # to ignore this command. Once an application has actually been submitted that
+    # stops being true on any machine, so the severity follows the data rather than
+    # the hostname.
+    #
+    # The warn wording states a fact ("no submitted applications yet") rather than
+    # judging the database worthless. Losing it would still cost an ingest and a
+    # rescore, and generated narrative answers accumulate in the DB only — see the
+    # `docs/profile/` invariant in CLAUDE.md. Those are not counted here; if that
+    # starts to matter, widen `at_risk`, do not widen the claim.
+    missing = None
     if not config.BACKUP_DIR.is_dir():
-        return Check("backups", False, f"{config.BACKUP_DIR} does not exist")
+        missing = f"{config.BACKUP_DIR} does not exist"
+    elif not sorted(config.BACKUP_DIR.glob("jobhunt-*.db")):
+        missing = f"no snapshots in {config.BACKUP_DIR}"
+    if missing:
+        at_risk = _submitted_count()
+        if at_risk is None:
+            return Check(
+                "backups",
+                True,
+                f"{missing}; could not read the database to tell whether that matters",
+                warn=True,
+            )
+        if at_risk:
+            return Check(
+                "backups",
+                False,
+                f"{missing} — and {at_risk} submitted application(s) would be "
+                f"unrecoverable. Run `make backup`.",
+            )
+        return Check(
+            "backups",
+            True,
+            f"{missing} — no submitted applications yet, so this is not urgent",
+            warn=True,
+        )
     failed = sorted(config.BACKUP_DIR.glob("*.FAILED"))
     snapshots = sorted(config.BACKUP_DIR.glob("jobhunt-*.db"))
-    if not snapshots:
-        return Check("backups", False, f"no snapshots in {config.BACKUP_DIR}")
     newest = max(snapshots, key=lambda p: p.stat().st_mtime)
     age_h = (time.time() - newest.stat().st_mtime) / 3600
     detail = f"{len(snapshots)} snapshots, newest {age_h:.1f}h old ({_human(newest.stat().st_size)})"

@@ -115,7 +115,10 @@ def assert_volume_ready(db_path: Path) -> None:
         raise VolumeNotReadyError(
             f"{root} is not a mount point, so the external disk is not mounted. "
             f"Refusing to touch {db_path}: creating it here would put a decoy "
-            f"database on the boot volume." + detail
+            f"database on the boot volume." + detail + "\n"
+            f"  Either mount the disk, or — if you did not mean to use one — comment "
+            f"out JOBHUNT_DB in .env. Unset, it defaults to jobhunt.db in the repo "
+            f"root, which needs no external disk."
         )
     sentinel = db_path.parent / SENTINEL_NAME
     try:

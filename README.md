@@ -58,18 +58,28 @@ make build-web     # compiles the React app into jobhunt/web/dist
 cp .env.example .env
 ```
 
-Three things actually need a value; the rest have working defaults.
+**Only one variable actually needs a value.** Everything else has a working default, and the
+shipped `.env.example` leaves it that way — the commented-out lines are options, not blanks to
+fill in.
 
 | Variable | What to put | Why |
 | --- | --- | --- |
-| `JOBHUNT_DB` | An absolute path on a **local** disk | Where everything lives. Never iCloud Drive, Dropbox, or any sync folder — WAL plus file-level sync corrupts SQLite, and `db.connect()` refuses such a path outright. A plain `~/jobhunt/jobhunt.db` is fine. A path under `/Volumes` gets extra mount checks — see below. |
 | `ANTHROPIC_API_KEY` | A key from [console.anthropic.com](https://console.anthropic.com) | Scoring, tailoring and answer drafting are all model calls. Measured cost is roughly $8–14/month at ~100 applications. Without it, discovery and the dashboard still work; scoring and tailoring do not. |
-| `JOBHUNT_PROFILE_DIR` | Leave blank unless your profile lives outside the repo | Defaults to `docs/profile/`. |
 
-If the database goes on an external volume, run `./deploy/install.sh --init-volume` once and
-paste the `JOBHUNT_DB_VOLUME_ID` it prints into `.env`. That stamps the disk so an unmounted
-volume — or a *different* disk mounted at the same path — is refused rather than silently
-written to. See [`docs/deploy-mini.md`](docs/deploy-mini.md).
+Two you may want later, both commented out by default:
+
+| Variable | Default | When to change it |
+| --- | --- | --- |
+| `JOBHUNT_DB` | `jobhunt.db` in the repo root, gitignored | Only if you want the database elsewhere. It must be on a **local** disk — never iCloud Drive, Dropbox, or any sync folder, since WAL plus file-level sync corrupts SQLite. `db.connect()` refuses such a path outright rather than letting you find out later. |
+| `JOBHUNT_PROFILE_DIR` | `docs/profile/` | Only if you keep your profile outside the checkout. |
+
+**If — and only if — you point `JOBHUNT_DB` at an external disk**, run
+`./deploy/install.sh --init-volume` once with it mounted and paste the `JOBHUNT_DB_VOLUME_ID`
+it prints into `.env`. A path under `/Volumes` gets three extra checks, because an unmounted
+`/Volumes` path is still a writable path on the boot volume: without them, opening the database
+with the disk absent creates a decoy that goes silently missing the moment the real disk mounts
+beside it. Skipping this step is not dangerous — it just means `make migrate` refuses to run
+until the disk is mounted and stamped. See [`docs/deploy-mini.md`](docs/deploy-mini.md).
 
 ### 3. Your profile
 
