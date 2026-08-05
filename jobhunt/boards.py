@@ -47,7 +47,7 @@ from typing import Any, Callable
 # Set JOBHUNT_CONTACT so a fork identifies itself rather than whoever wrote this.
 USER_AGENT = (
     "jobhunt/0.1 (personal job search, ~1 run per 12h; "
-    f"contact {os.environ.get('JOBHUNT_CONTACT') or 'https://github.com/merlinymy/jobApplicationHelper'})"
+    f"contact {os.environ.get('JOBHUNT_CONTACT') or 'https://github.com/merlinymy/jobhunt'})"
 )
 TIMEOUT = 25
 

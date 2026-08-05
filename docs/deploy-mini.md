@@ -53,19 +53,14 @@ rmdir /Volumes/jobhunt
 ## 4. The repo — on the internal disk
 
 ```bash
-git clone git@github.com:merlinymy/jobApplicationHelper.git ~/projects/jobApplicationHelper
-cd ~/projects/jobApplicationHelper
+git clone git@github.com:merlinymy/jobhunt.git ~/projects/jobhunt
+cd ~/projects/jobhunt
 make venv          # installs the extras; a bare install dies at 06:30 on `import jobspy`
 make build-web     # Node 20+; compiles the React app into jobhunt/web/dist
 ```
 
-**If this machine already had a checkout from before 2026-08-05, back up `docs/profile/`
-before pulling.** That commit untracked it, and git deletes a file a commit removes — the
-`.gitignore` entry does not protect a copy that is already tracked in your checkout:
-
-```bash
-cp -a docs/profile ~/profile-backup && git pull && cp -a ~/profile-backup/. docs/profile/
-```
+`docs/profile/` is not in this repository and never was — see the README. A fresh clone has
+no profile at all; step 6b puts one there.
 
 The repo stays on the internal disk deliberately. On the SSD, launchd could not exec the agents
 when that disk is absent, and you would get no log saying why.

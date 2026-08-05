@@ -46,7 +46,7 @@ agents-stop:  ## stop the agents (do this before ejecting the disk)
 # it holds a legal name, a phone number, and other people's contact details — so
 # these move it directly over the tailnet instead. HOST defaults to the mini.
 HOST ?= jobhunt-mini
-REMOTE_PROFILE ?= code/jobhunt/docs/profile/
+REMOTE_PROFILE ?= projects/jobhunt/docs/profile/
 
 profile-push:  ## copy docs/profile/ to the host (HOST=... to override)
 	rsync -av --exclude='.DS_Store' docs/profile/ "$(HOST):$(REMOTE_PROFILE)"
