@@ -12,10 +12,10 @@ Phase 3's _code_ can be built against a few guessed questions.
 
 - [ ] Apply to jobs by hand, ideally across different ATS. Ongoing.
 - [ ] Log **only the questions that surprised you**, verbatim, as you encounter them
-- [ ] Fill the `identity` block of `docs/profile/facts.yaml` — 5 minutes, Phase 2 needs it
-- [ ] Fill `docs/profile/scoring.yaml` — thinking work, ~1 hour, Phase 4 is only as good as it
-- [ ] Start `docs/profile/experience.yaml` (intake section C) — **the long pole.** Several
-      hours, gated on nothing, and Phase 2 stalls without it.
+- [x] Fill the `identity` block of `docs/profile/facts.yaml`
+- [x] Fill `docs/profile/scoring.yaml` — including the seniority band, 2026-08-03
+- [x] `docs/profile/experience.yaml` — 102 bullets across 5 entries, 159 evidence
+      references, 40 testimony markers, 17 exclusion blocks. The long pole, and it landed.
 
 **Real dependencies:** Phases 1, 2, 4, and 5 need none of the applications. Phase 3 needs real
 question wording for its seed data. Phase 5 benefits from real rejection emails as fixtures.
