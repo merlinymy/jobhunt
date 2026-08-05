@@ -23,9 +23,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from .. import answers, config, db, queries
+from .. import answers, config, db, queries, runs
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
-from . import actions, views
+from . import actions, runner, views
 
 router = APIRouter(prefix="/api")
 
@@ -94,6 +94,12 @@ class TailorRequest(BaseModel):
     limit: int | None = None
 
 
+class RunRequest(BaseModel):
+    # The pair, because ingest alone leaves rows in `discovered` and those never
+    # reach the review queue. `runner.start` rejects anything not in PIPELINES.
+    pipeline: str = "ingest_score"
+
+
 # --------------------------------------------------------------------- meta ---
 
 
@@ -101,6 +107,35 @@ class TailorRequest(BaseModel):
 def meta() -> dict[str, Any]:
     """State vocabulary and column definitions, so the client hardcodes none of it."""
     return views.meta()
+
+
+# --------------------------------------------------------------------- runs ---
+
+
+@router.get("/runs")
+def list_runs(conn: Conn) -> dict[str, Any]:
+    """The live run and the last of each task. Polled while one is going."""
+    return views.runs_view(conn)
+
+
+@router.post("/runs", status_code=202)
+def start_run(conn: Conn, payload: RunRequest) -> dict[str, Any]:
+    """Start discovery, scoring, or both. Returns immediately; watch GET /runs.
+
+    202 rather than 201: nothing is finished, and the work outlives the request
+    by anything up to three quarters of an hour.
+
+    409 is the interesting one. The lock is a partial unique index shared with
+    the CLI and the launchd agent, so this is the honest answer to a double-tap,
+    a second tab, the phone and the laptop at once, and a click at 06:31 while
+    the scheduled sweep is still going. The message names which.
+    """
+    try:
+        return runner.start(conn, payload.pipeline)
+    except runs.AlreadyRunning as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except runner.NotReady as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 # ----------------------------------------------------------------- pipeline ---

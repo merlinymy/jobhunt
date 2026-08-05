@@ -34,6 +34,7 @@ import yaml
 
 from . import config, states
 from .db import transaction
+from .runs import ProgressFn
 
 SCORING_YAML = config.PROFILE_DIR / "scoring.yaml"
 
@@ -282,7 +283,12 @@ def location_tier(job: sqlite3.Row, cfg: Config) -> int:
 # =================================== running ===================================
 
 
-def run(conn: sqlite3.Connection, *, limit: int | None = None) -> dict[str, int]:
+def run(
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None = None,
+    on_progress: ProgressFn | None = None,
+) -> dict[str, int]:
     """Walk every `discovered` application. Returns counts by outcome.
 
     Only rejections move. A survivor stays `discovered` and is picked up by the
@@ -308,8 +314,18 @@ def run(conn: sqlite3.Connection, *, limit: int | None = None) -> dict[str, int]
          WHERE a.state = ?
          ORDER BY a.id
     """
-    rows = conn.execute(sql + (f" LIMIT {int(limit)}" if limit else ""), (states.DISCOVERED,))
-    for row in rows.fetchall():
+    fetched = conn.execute(
+        sql + (f" LIMIT {int(limit)}" if limit else ""), (states.DISCOVERED,)
+    ).fetchall()
+    for index, row in enumerate(fetched):
+        # Every 25, and outside the transaction below. Free and deterministic,
+        # but a backlog of several thousand is still ten seconds of a dashboard
+        # saying nothing at all.
+        if on_progress and index % 25 == 0:
+            on_progress(
+                phase="prefilter", done=index, total=len(fetched),
+                counts={k: v for k, v in counts.items() if v},
+            )
         counts["examined"] += 1
         verdict = evaluate(row, cfg, row["company"])
         if verdict.passed:

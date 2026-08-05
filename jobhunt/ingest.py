@@ -35,9 +35,10 @@ from typing import Any
 
 import yaml
 
-from . import boards, config, queries, states
-from .db import connect
+from . import boards, config, queries, runs, states
+from .db import connect, transaction
 from .normalize import UnparseableURL, detect_ats, normalize_apply_url
+from .runs import ProgressFn
 
 SEARCHES_YAML = config.REPO_ROOT / "config" / "searches.yaml"
 
@@ -93,6 +94,20 @@ class Sweep:
         if self.unparseable:
             parts.append(f"{self.unparseable} skipped (unparseable url)")
         return " · ".join(parts)
+
+    def tally(self) -> dict[str, int]:
+        """The counters worth watching while it is still going.
+
+        Rendered as-is by the dashboard, in this order, so adding a counter here
+        needs no frontend change. The last two are omitted at zero: "0 filtered"
+        on every run is the kind of noise that stops a number being read at all.
+        """
+        counts = {"found": self.found, "new": self.inserted, "duplicates": self.duplicates}
+        if self.filtered_by_title:
+            counts["wrong title"] = self.filtered_by_title
+        if self.incomplete or self.unparseable:
+            counts["unusable"] = self.incomplete + self.unparseable
+        return counts
 
 
 def load_config() -> dict[str, Any]:
@@ -265,7 +280,9 @@ def passes_title(title: str, keywords: list[str], blocked: list[str]) -> bool:
     return any(word in lowered for word in keywords)
 
 
-def poll_boards(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], int]:
+def poll_boards(
+    cfg: dict[str, Any], on_progress: ProgressFn | None = None
+) -> tuple[list[dict[str, Any]], list[str], int]:
     """Every seeded ATS board. Returns `(rows, failures, filtered_out)`.
 
     A dead board is expected, not exceptional — companies rename boards, get
@@ -292,9 +309,20 @@ def poll_boards(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], i
     rows: list[dict[str, Any]] = []
     failures: list[str] = []
     filtered_out = 0
+    total = sum(len(slugs or []) for slugs in seeds.values())
+    polled = 0
 
     for vendor, slugs in seeds.items():
         for slug in slugs or []:
+            if on_progress:
+                # Named, not just counted. Fifty boards at a per-host throttle is
+                # the slowest silent stretch of a sweep, and "which one is it
+                # stuck on" is the only question worth asking while it runs.
+                on_progress(
+                    phase="boards", message=f"{vendor} · {slug}",
+                    done=polled, total=total,
+                )
+            polled += 1
             try:
                 fetched = boards.fetch(vendor, str(slug))
             except boards.RateLimited as exc:
@@ -323,7 +351,12 @@ def poll_boards(cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str], i
     return rows, failures, filtered_out
 
 
-def store(conn: sqlite3.Connection, rows: list[dict[str, Any]], sweep: Sweep) -> None:
+def store(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+    sweep: Sweep,
+    on_progress: ProgressFn | None = None,
+) -> None:
     """Write one search's results. Each posting is its own transaction.
 
     Deliberately not one transaction for the sweep: a sweep is a few hundred
@@ -331,7 +364,12 @@ def store(conn: sqlite3.Connection, rows: list[dict[str, Any]], sweep: Sweep) ->
     discard the first three hundred. The dedup guard is a UNIQUE index, not
     anything held in memory, so a partial run resumes correctly.
     """
-    for row in rows:
+    for index, row in enumerate(rows):
+        # Between postings, never inside the transaction below. Only the board
+        # poll asks for this: it arrives with thousands of rows at once, where a
+        # bar that sits at zero for ten seconds looks like a hang.
+        if on_progress and index % 25 == 0:
+            on_progress(done=index, counts=sweep.tally())
         sweep.found += 1
         title = _text(row.get("title"))
         company = _text(row.get("company"))
@@ -356,7 +394,22 @@ def store(conn: sqlite3.Connection, rows: list[dict[str, Any]], sweep: Sweep) ->
         interval = _text(row.get("interval"))
 
         try:
-            with conn:  # one posting, committed or not at all
+            # `db.transaction`, not `with conn:`. The connection runs with
+            # isolation_level=None, so `with conn:` opens no transaction at all —
+            # its __exit__ commits an autocommit connection, which is a no-op,
+            # and each statement below had already committed on its own. The
+            # comment that used to be here claimed atomicity the code did not
+            # have: a `states.create` that failed after `insert_job` succeeded
+            # left an orphan job with no application, and `apply_url_norm` being
+            # UNIQUE meant every later run counted it as a duplicate and moved
+            # on. The posting was then invisible forever.
+            #
+            # Nesting is why this is enough: `upsert_company` and `states.create`
+            # both open `transaction(conn)` themselves and join this one rather
+            # than committing early, so all four writes land together or not at
+            # all. It is also fewer fsyncs than before, which the mini notices —
+            # it runs synchronous=FULL.
+            with transaction(conn):
                 company_id = queries.upsert_company(
                     conn, company, ats_type=ats_type, ats_slug=ats_slug
                 )
@@ -391,6 +444,7 @@ def run(
     *,
     scrape: bool = True,
     poll: bool = True,
+    on_progress: ProgressFn | None = None,
 ) -> Sweep:
     """One full sweep: every term against every location, then every board.
 
@@ -403,21 +457,34 @@ def run(
     """
     cfg = cfg or load_config()
     sweep = Sweep()
+    # A no-op keeps every call site below unconditional. The CLI passes nothing
+    # and behaves exactly as it did before this existed.
+    report: ProgressFn = on_progress or (lambda **_: None)
 
     if scrape:
         delay = float(cfg.get("delay_seconds", 8))
         pairs = [(term, loc) for term in cfg["terms"] for loc in cfg["locations"]]
         consecutive_empty = 0
         for index, (term, location) in enumerate(pairs):
+            where = _text(location.get("city")) or "remote"
+            report(
+                phase="searching",
+                message=f"{term} · {where}",
+                done=index,
+                total=len(pairs),
+                counts=sweep.tally(),
+            )
             rows = search(cfg, term, location)
             sweep.searches += 1
-            where = _text(location.get("city")) or "remote"
             if rows:
                 consecutive_empty = 0
             else:
                 sweep.empty_searches.append(f"{term} / {where}")
                 consecutive_empty += 1
             store(conn, rows, sweep)
+            # Again after the write, so the tallies on screen are what is in the
+            # database rather than what was about to be.
+            report(done=index + 1, counts=sweep.tally())
 
             # Indeed is a scrape, not an API, and it is the one source that can
             # ban us. A run of empty results is what throttling looks like from
@@ -438,12 +505,20 @@ def run(
                 time.sleep(delay + random.uniform(0, delay * 0.5))
 
     if poll:
-        rows, failures, filtered = poll_boards(cfg)
+        rows, failures, filtered = poll_boards(cfg, on_progress=report)
         seeds = cfg.get("boards") or {}
         sweep.boards_polled = sum(len(slugs or []) for slugs in seeds.values())
         sweep.board_failures = failures
         sweep.filtered_by_title = filtered
-        store(conn, rows, sweep)
+        report(
+            phase="storing",
+            message=f"Storing {len(rows)} board postings",
+            done=0,
+            total=len(rows),
+            counts=sweep.tally(),
+        )
+        store(conn, rows, sweep, on_progress=report)
+    report(phase="finished", message=sweep.line(), done=0, total=None, counts=sweep.tally())
     return sweep
 
 
@@ -490,12 +565,24 @@ def main(argv: list[str] | None = None) -> int:
                         )
             print(f"dry run — {sweep.searches} searches, {sweep.found} postings, nothing written")
         else:
-            sweep = run(
-                conn, cfg, scrape=not args.boards_only, poll=not args.scrape_only
-            )
+            # The lock is taken here rather than inside `run` so a dry run — which
+            # writes nothing and is the thing you reach for while the 06:30 agent
+            # is still going — is never refused.
+            with runs.track(conn, "ingest") as report:
+                sweep = run(
+                    conn, cfg,
+                    scrape=not args.boards_only,
+                    poll=not args.scrape_only,
+                    on_progress=report,
+                )
             print(sweep.line())
             for source, count in sorted(sweep.per_source.items()):
                 print(f"  {source}: {count}")
+    except runs.AlreadyRunning as exc:
+        # 3, not 1: deploy/discover.sh treats a non-zero ingest as a bad morning
+        # worth a red agent, and "the dashboard is already doing it" is not that.
+        print(f"ingest not run: {exc}", file=sys.stderr)
+        return 3
     except IngestError as exc:
         print(f"ingest not run: {exc}", file=sys.stderr)
         return 1

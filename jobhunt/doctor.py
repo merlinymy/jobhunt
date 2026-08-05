@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import logging
 import os
 import shutil
 import sqlite3
@@ -207,6 +208,107 @@ def backups() -> Check:
     return Check("backups", True, detail)
 
 
+DISCOVER_LABEL = "com.jobhunt.discover"
+
+
+def agent_loaded(label: str = DISCOVER_LABEL) -> bool | None:
+    """Is this launchd agent loaded in the current GUI session?
+
+    None means the question could not be answered — no `launchctl`, no Aqua
+    session, or not macOS at all. Callers must not read that as a no.
+    """
+    try:
+        done = subprocess.run(
+            ["launchctl", "list", label], capture_output=True, timeout=5
+        )
+    except Exception:
+        return None
+    return done.returncode == 0
+
+
+def discovery_status() -> list[tuple[int, str]]:
+    """Where new postings come from, as (log level, message) pairs.
+
+    Called at dashboard startup. Nothing in the UI says how jobs arrive, so an
+    uninstalled discovery agent looks identical to a quiet job market: the queue
+    simply stops growing and there is no page that would tell you why.
+    """
+    out: list[tuple[int, str]] = []
+    newest: str | None = None
+    waiting: int | None = None
+    try:
+        conn = db.connect()
+    except Exception:
+        conn = None
+    if conn is not None:
+        try:
+            newest = conn.execute("SELECT max(discovered_at) FROM jobs").fetchone()[0]
+            waiting = conn.execute(
+                "SELECT count(*) FROM applications WHERE state = ?", (states.SCORED,)
+            ).fetchone()[0]
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    if newest:
+        try:
+            age_h = (
+                datetime.now(timezone.utc) - datetime.fromisoformat(newest)
+            ).total_seconds() / 3600
+            when = f"{age_h:.0f}h ago" if age_h < 48 else f"{age_h / 24:.0f} days ago"
+        except ValueError:
+            when = newest
+    else:
+        when = "never"
+    queue = "" if waiting is None else f", {waiting} scored and waiting in /review"
+    out.append((logging.INFO, f"discovery: last posting found {when}{queue}"))
+
+    if agent_loaded() is False:
+        out.append((
+            logging.WARNING,
+            "discovery: no launchd agent installed, so nothing finds new postings on "
+            "its own — run `make ingest && make score` by hand, or "
+            "`./deploy/install.sh` to schedule it for 06:30 and 18:30 daily",
+        ))
+    return out
+
+
+def discovery_runs() -> Check:
+    """Did the last sweep and the last scoring run actually work?
+
+    A failed 06:30 agent is otherwise invisible: nothing crashes, the queue just
+    stops growing, and the log that says why is one nobody reads on a good day.
+    A warning rather than a failure — a dead source is a bad week, not a broken
+    install, and this check has to stay worth reading.
+    """
+    from . import runs
+
+    try:
+        conn = db.connect()
+    except Exception as exc:
+        return Check("runs", False, f"cannot open the database: {exc}")
+    try:
+        live = runs.active(conn)
+        if live is not None:
+            return Check(
+                "runs", True,
+                f"{live['task']} running now ({live['trigger']}, started "
+                f"{runs.ago(live['started_at'])} ago)",
+            )
+        parts, unhappy = [], False
+        for task in runs.TASKS:
+            row = runs.latest(conn, task)
+            if row is None:
+                parts.append(f"{task}: never run")
+                continue
+            parts.append(f"{task}: {row['state']} {runs.ago(row['finished_at'])} ago")
+            unhappy = unhappy or row["state"] != "done"
+        return Check("runs", True, " · ".join(parts), warn=unhappy)
+    finally:
+        conn.close()
+
+
 def extras() -> Check:
     """The optional deps are imported lazily inside functions, so a venv missing
     them installs clean and then dies at 06:30 on `import jobspy`."""
@@ -285,6 +387,7 @@ CHECKS = (
     migrations,
     disk_space,
     backups,
+    discovery_runs,
     extras,
     secrets,
     bind,

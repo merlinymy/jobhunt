@@ -2,7 +2,7 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { api, qs } from "./client";
 import { k, type Params } from "./keys";
 import type {
-  Detail, Fill, Meta, Packet, Pipeline, ReviewBatch, Stats, UrlCheck, Contact,
+  Detail, Fill, Meta, Packet, Pipeline, ReviewBatch, Runs, Stats, UrlCheck, Contact,
 } from "./types";
 
 /** Constants and profile data. Neither changes without a deploy or a
@@ -56,6 +56,24 @@ export function useContacts() {
     queryKey: k.contacts(),
     queryFn: () => api.get<{ contacts: Contact[] }>("/contacts"),
     ...STATIC,
+  });
+}
+
+/** Discovery and scoring runs.
+ *
+ *  Polled only while something is actually running. This dashboard sits open on
+ *  a desk all day, and a three-second poll into an idle localhost is a space
+ *  heater with a progress bar. `staleTime: 0` because the whole point is that
+ *  the answer is different every few seconds — and TanStack stops the interval
+ *  in a backgrounded tab on its own, with the global `refetchOnWindowFocus`
+ *  catching it back up the moment you look at it again.
+ */
+export function useRuns() {
+  return useQuery({
+    queryKey: k.runs(),
+    queryFn: () => api.get<Runs>("/runs"),
+    refetchInterval: (query) => (query.state.data?.active ? 3000 : false),
+    staleTime: 0,
   });
 }
 

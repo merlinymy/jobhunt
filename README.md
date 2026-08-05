@@ -112,16 +112,67 @@ make doctor         # says whether anything is missing
 
 ```bash
 make dev            # http://127.0.0.1:8000
-make ingest         # find postings   (needs config/searches.yaml — see below)
-make score          # prefilter, then LLM scoring on what survives
 ```
 
 `config/searches.yaml` holds the search terms and the company job boards to poll. **Edit it
-before your first `make ingest`** — the version in this repo is one person's search, so as
+before your first discovery run** — the version in this repo is one person's search, so as
 shipped it will find you someone else's jobs.
 
-Then open the dashboard, work `/review`, approve what you would genuinely apply to, and build a
-packet. **You submit every application yourself.** The system never touches a form.
+Then hit **Find new jobs** on the pipeline page. It runs discovery and then scoring, in the
+background, and shows you which step it is on and what it has found so far — a sweep takes
+several minutes because the Indeed scrape is deliberately paced, and a scoring batch can take
+considerably longer. The same two steps from a terminal, if you prefer:
+
+```bash
+make ingest         # find postings
+make score          # prefilter, then LLM scoring on what survives
+```
+
+Either way, only one of each can run at a time. The button, the terminal and the scheduled
+agent below all take the same lock, so whichever is second is told who is already going rather
+than starting a second scrape of the same site.
+
+Then work `/review`, approve what you would genuinely apply to, and build a packet. **You
+submit every application yourself.** The system never touches a form.
+
+### 5. Stop running discovery by hand
+
+The button and the two commands are all **one-shot**. Nothing in the app polls on its own, so
+left like this you get new postings only when you remember to go and ask for them — and a stale
+queue looks exactly like a quiet job market.
+
+```bash
+./deploy/install.sh
+```
+
+That installs three launchd agents: **discovery at 06:30 and 18:30 daily** (ingest then score,
+back to back), the dashboard, and a nightly verified backup. It checks the venv and the extras
+and runs `make doctor` before touching anything.
+
+`make dev` reports the state on every start, so you do not have to remember:
+
+```
+INFO     discovery: last posting found 7h ago, 645 scored and waiting in /review
+WARNING  discovery: no launchd agent installed, so nothing finds new postings on its own …
+```
+
+Once they are installed, the pipeline page is where you see whether they worked — a scheduled
+run shows the same live progress as one you started yourself, labelled as the agent's, and a
+run that failed or was cut off stays on screen with its reason until the next one. `make
+doctor` answers the same question from a terminal.
+
+Three caveats, all of them macOS being macOS:
+
+- **Agents need a logged-in GUI session.** They load into `gui/$UID`, so install at the console
+  or over Screen Sharing, not from a bare SSH shell — and after an unattended reboot with no
+  auto-login, nothing comes back.
+- **Sleep silently skips runs.** `StartCalendarInterval` does not wake the machine, and a missed
+  window is simply missed. On an always-on host:
+  `sudo pmset -a sleep 0 disablesleep 1 disksleep 0 autorestart 1`.
+- **This makes the machine scrape twice a day.** Fine on a host you leave running; think twice
+  on a laptop you carry around.
+
+`make agents-stop` unloads them again.
 
 ### Working on the frontend
 
@@ -134,13 +185,13 @@ make check-web      # eslint + tsc
 `make build-web` writes into `jobhunt/web/dist`, which is gitignored and rebuilt on the host.
 The running server picks up a new build on the next request; no restart needed.
 
-### Running it permanently
+### Running it on a dedicated machine
 
-Nothing above needs a server — `make dev` on a laptop is a complete install. If you want it
-running unattended, [`docs/deploy-mini.md`](docs/deploy-mini.md) is a worked example on macOS:
-three launchd agents for discovery, the dashboard and nightly verified backups, the database on
-an external disk, and HTTPS over Tailscale so the review queue works from a phone. Adapt or
-ignore it; the app itself does not care.
+`./deploy/install.sh` above is enough to keep a laptop fed. Going further — a machine that
+serves the queue to your phone and survives a reboot untouched — is
+[`docs/deploy-mini.md`](docs/deploy-mini.md), a worked example on macOS: the same three agents,
+the database on an external disk behind a mount guard, and HTTPS over Tailscale so `/review`
+works one-handed on a phone. Adapt or ignore it; the app itself does not care.
 
 ## How it works
 
@@ -191,7 +242,11 @@ TypeScript. It works on a phone — the review queue is the flow worth having in
   your corpus showing exactly what was reworded, and the answer set with a copy button on each.
 - **Pipeline** — funnel counts and the applications table, with six composing filters and eight
   sortable columns. Filters and sort live in the query string, so any view is a bookmarkable
-  URL that survives a reload.
+  URL that survives a reload. **Find new jobs** is here and in the empty review queue: it runs
+  discovery then scoring in a background thread and reports the step, the search or board it is
+  on, and the running tallies. The lock lives in the database rather than the process, so it is
+  shared with the CLI and the scheduled agent — clicking during the 06:30 run says so instead
+  of starting a second scrape. Polling stops when nothing is running.
 - **Fill** — every field an ATS asks for, one per box, with dates rendered in each of the four
   formats they disagree about. Not autofill; just the retyping removed.
 - **Log application** — manual entry for anything submitted outside the pipeline. Checks the
@@ -213,6 +268,7 @@ jobhunt/
   migrate.py     applies migrations, refuses edited ones
   normalize.py   URL normalization, ATS detection, dedup keys
   states.py      the state machine — every state write goes through here
+  runs.py        one ingest and one score at a time, and their live progress
   queries.py     named parameterized SQL, plus filtering and stats aggregation
   ingest.py  prefilter.py  score.py  tailor.py  resume.py  answers.py  llm.py
   web/
@@ -220,6 +276,7 @@ jobhunt/
     api.py       the JSON API — routing and serialization only
     views.py     what a page shows (no framework in it)
     actions.py   what a button does (no framework in it)
+    runner.py    starts a worker in a thread; the request only takes the lock
 web/             the React app; builds into jobhunt/web/dist
 config/
   models.yaml    which model runs which task, and why
@@ -247,6 +304,11 @@ These raise at runtime rather than living only in a document:
   it differs; add the next numbered file instead.
 - **Illegal state transitions are rejected**, and `log_event()` refuses to forge a
   `state_change`.
+- **One discovery run and one scoring run at a time**, across every caller — the dashboard, a
+  terminal, and the launchd agent are separate processes, so the guard is a partial unique
+  index on `runs` rather than a flag in memory. A double-click is two requests already in
+  flight; the second `INSERT` loses and the click gets a 409 naming the run that won. A run
+  whose process died is reclaimed once its pid is gone or it has been silent for ten minutes.
 - Schema-level: `jobs.apply_url_norm` and `applications.job_id` are UNIQUE, one processed
   email per `email_msg_id`, and natural-key indexes on every table `make load-profile` writes.
 
@@ -267,6 +329,10 @@ These raise at runtime rather than living only in a document:
 | `make doctor` | disk, schema, backups, dependencies, bind address |
 | `make test` | the two table-driven suites |
 | `make check-web` | eslint and tsc |
+
+`make ingest` and `make score` exit **3**, having done nothing, when the dashboard or the
+scheduled agent already has that step running — distinct from 1, so `deploy/discover.sh` does
+not read "someone else got there first" as a failed morning.
 
 There is deliberately no broad test suite — correctness lives in schema constraints and
 runtime assertions that raise. The two exceptions are table-driven against real fixtures: URL

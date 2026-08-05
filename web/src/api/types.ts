@@ -273,3 +273,46 @@ export interface TailorResult {
   kept: number;
   reworded: number;
 }
+
+/** Discovery and scoring runs. The server holds the lock and the progress; this
+ *  is a read of `runs`, not a state machine the client gets to have opinions
+ *  about. A `RunPipeline` is what a button asks for; a `task` is one step of it.
+ *  Not `Pipeline` — that is already the funnel this fills. */
+export type RunPipeline = "ingest_score" | "ingest" | "score";
+
+export interface RunProgress {
+  phase: string;
+  message: string;
+  done: number;
+  /** null when the denominator is genuinely unknown — show a spinner, not a
+   *  bar, rather than inventing one. */
+  total: number | null;
+  /** Already labelled and ordered by the worker, so a new counter needs no
+   *  change here. */
+  counts: Record<string, number>;
+}
+
+export interface Run {
+  id: number;
+  task: "ingest" | "score";
+  chain: string[];
+  step: number;
+  steps: number;
+  state: "running" | "done" | "failed" | "interrupted";
+  trigger: "dashboard" | "cli" | "launchd";
+  started_at: string;
+  finished_at: string | null;
+  /** Since it finished, or since it started while it still is. Server-side, so
+   *  a laptop with a skewed clock cannot report a run from the future. */
+  age_seconds: number | null;
+  progress: RunProgress | null;
+  error: string | null;
+}
+
+export interface Runs {
+  active: Run | null;
+  last: { ingest: Run | null; score: Run | null };
+  phase_labels: Record<string, string>;
+  waiting_to_score: number;
+  waiting_to_review: number;
+}

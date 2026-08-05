@@ -219,7 +219,7 @@ def verify_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError(f"expected WAL journal mode, got {mode!r}")
     missing = [
         table
-        for table in ("applications", "events", "jobs", "companies")
+        for table in ("applications", "events", "jobs", "companies", "runs")
         if not conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
         ).fetchone()

@@ -12,5 +12,6 @@ export const k = {
   stats: (p: Params) => ["stats", p] as const,
   fill: () => ["fill"] as const,
   contacts: () => ["contacts"] as const,
+  runs: () => ["runs"] as const,
   urlCheck: (url: string) => ["urlCheck", url] as const,
 };

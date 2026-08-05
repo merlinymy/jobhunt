@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { usePipeline } from "../api/queries";
 import type { Application, Pipeline as PipelineData } from "../api/types";
+import { Discovery } from "../components/Discovery";
 import { Sheet } from "../components/Sheet";
 import { SortableHeader } from "../components/SortableHeader";
 import { Button, Card, EmptyState, ErrorState, Pill, Spinner, inputClass } from "../components/ui";
@@ -44,7 +45,13 @@ export default function Pipeline() {
 
   return (
     <div className="mx-auto max-w-7xl">
-      <h1 className="mb-4 text-2xl font-semibold tracking-tight">Pipeline</h1>
+      {/* Discovery sits above the funnel because it is what fills it, and
+          because "why has nothing arrived since Tuesday" is the question this
+          page is opened with. */}
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Pipeline</h1>
+        <Discovery className="sm:w-96" />
+      </div>
 
       <Panels data={data} />
 

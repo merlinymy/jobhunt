@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode
 
-from .. import answers, config, prefilter, queries, states
+from .. import answers, config, prefilter, queries, runs, states
 
 # ---------------------------------------------------------------- pipeline ---
 
@@ -475,6 +475,29 @@ def stats_view(conn: sqlite3.Connection, params: Mapping[str, str]) -> dict[str,
         "health": queries.queue_health(conn),
         "spend": queries.llm_spend(conn),
         **stats_tables(conn, params),
+    }
+
+
+# ------------------------------------------------------------------- runs ---
+
+
+def runs_view(conn: sqlite3.Connection) -> dict[str, Any]:
+    """What the discovery button shows: the live run, and the last of each task.
+
+    Polled every few seconds while something is running, so it stays three
+    indexed reads. The last run of each task is what the idle line reads —
+    "last sweep 6h ago · 23 new" — and it is also the only place a failure from
+    an unattended 06:30 agent is visible without opening a log.
+
+    `waiting_to_score` is the count behind "Score only, 34 waiting": a button
+    that spends money should say how much work it is about to buy.
+    """
+    counts = queries.state_counts(conn)
+    return {
+        **runs.snapshot(conn),
+        "phase_labels": runs.PHASE_LABELS,
+        "waiting_to_score": counts.get(states.DISCOVERED, 0),
+        "waiting_to_review": counts.get(states.SCORED, 0),
     }
 
 

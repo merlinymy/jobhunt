@@ -1,8 +1,10 @@
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api } from "./client";
+import { ApiError, api } from "./client";
 import { k } from "./keys";
-import type { Decision, Detail, Packet, ReviewBatch, TailorResult } from "./types";
+import type {
+  Decision, Detail, Packet, ReviewBatch, Run, RunPipeline, Runs, TailorResult,
+} from "./types";
 
 /** Everything a decision can move.
  *
@@ -147,6 +149,38 @@ export function useCreateApplication() {
     ...INLINE,
     mutationFn: (form: Record<string, unknown>) => api.post<{ id: number }>("/applications", form),
     onSuccess: () => invalidatePipeline(qc),
+  });
+}
+
+/** Start a discovery or scoring run.
+ *
+ *  Never optimistic and never retried. The server claims the lock inside the
+ *  request, so the 202 means "it is running" and a 409 means something else got
+ *  there first — a second tab, the phone, or the 06:30 agent. That is not an
+ *  error worth a red toast: the thing the click wanted is happening, so say so
+ *  quietly and let the progress panel show whose run it actually is.
+ */
+export function useStartRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    ...INLINE,
+    retry: false,
+    mutationFn: (pipeline: RunPipeline) => api.post<Run>("/runs", { pipeline }),
+    // Seed the run the 202 just described, rather than waiting for the refetch
+    // below to confirm it. Otherwise there is a gap of one round trip where the
+    // mutation is no longer pending and no run is known yet — during which the
+    // button re-enables itself and invites the second click.
+    onSuccess: (run) => {
+      qc.setQueryData<Runs>(k.runs(), (old) => (old ? { ...old, active: run } : old));
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        toast(error.message, { description: "Following it below." });
+        return;
+      }
+      toast.error(error.message);
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: k.runs() }),
   });
 }
 

@@ -6,8 +6,9 @@ import { toast } from "sonner";
 import { useDecide } from "../api/mutations";
 import { useReview } from "../api/queries";
 import type { ReviewCard } from "../api/types";
+import { Discovery } from "../components/Discovery";
 import { Sheet } from "../components/Sheet";
-import { Button, Card, EmptyState, ErrorState, Pill, Spinner } from "../components/ui";
+import { Button, Card, ErrorState, Pill, Spinner } from "../components/ui";
 import { scoreTone } from "../lib/states";
 
 type Decided = ReviewCard & { decided?: "approved" | "skipped"; pending?: boolean };
@@ -81,10 +82,15 @@ export default function Review() {
       </div>
 
       {batch.length === 0 ? (
-        <EmptyState
-          title="Queue empty."
-          hint="Nothing scored is waiting. `make ingest && make score` finds more."
-        />
+        /* An empty queue is the one moment the button is certainly wanted, so it
+           goes here rather than sending you to another page to find it. */
+        <div className="card grid justify-items-center gap-4 p-8 text-center">
+          <div>
+            <p className="font-medium">Queue empty.</p>
+            <p className="mt-1 text-sm text-dim">Nothing scored is waiting.</p>
+          </div>
+          <Discovery className="w-full max-w-md text-left" />
+        </div>
       ) : (
         <div className="grid gap-3">
           {batch.map((card) => (
