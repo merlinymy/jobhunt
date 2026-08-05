@@ -9,6 +9,17 @@
   · <span class="mono">{{ app.state }}</span>
 </p>
 
+{% if duplicates %}
+  <div class="notice warn">
+    {{ duplicates }} other application{{ '' if duplicates == 1 else 's' }} at this company
+    share this title — the same role listed in other cities. Apply to one.
+    {% for d in duplicate_rows %}
+      <div class="dim">· <a href="/packet/{{ d.id }}">{{ d.location or 'no location' }}</a>
+        — <span class="mono">{{ d.state }}</span></div>
+    {% endfor %}
+  </div>
+{% endif %}
+
 {% if referral %}
   <div class="notice ok">🤝 You know <strong>{{ referral }}</strong> here — ping before applying.</div>
 {% endif %}

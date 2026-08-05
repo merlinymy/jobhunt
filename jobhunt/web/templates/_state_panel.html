@@ -6,14 +6,25 @@
     {% if app.is_terminal %}<span class="dim">terminal</span>{% endif %}
   </p>
 
+  {% if app.state in ('job_approved', 'packet_ready') %}
+    <p><a href="/packet/{{ app.id }}"><strong>Open the packet →</strong></a></p>
+  {% endif %}
+
   {% if app.next_states %}
     <div class="actions">
       {% for s in app.next_states %}
-        <form hx-post="/applications/{{ app.id }}/transition"
-              hx-target="#state-panel" hx-swap="outerHTML">
-          <input type="hidden" name="to_state" value="{{ s }}">
-          <button type="submit">→ {{ s.replace('_', ' ') }}</button>
-        </form>
+        {% if s == 'packet_ready' and not app.has_resume %}
+          {# Offering this button was the bug. The transition is legal but the
+             state means "a tailored resume exists", so it is refused — and a
+             button that always errors is worse than no button. #}
+          <a class="button-ish" href="/packet/{{ app.id }}">→ build the packet</a>
+        {% else %}
+          <form hx-post="/applications/{{ app.id }}/transition"
+                hx-target="#state-panel" hx-swap="outerHTML">
+            <input type="hidden" name="to_state" value="{{ s }}">
+            <button type="submit">→ {{ s.replace('_', ' ') }}</button>
+          </form>
+        {% endif %}
       {% endfor %}
     </div>
     <p class="hint">

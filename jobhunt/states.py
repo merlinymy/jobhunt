@@ -72,12 +72,20 @@ EVENT_KINDS = frozenset({"state_change", "email_in", "note", "interview", "diges
 
 
 class InvalidTransition(Exception):
-    """A (from_state, to_state) pair absent from TRANSITIONS."""
+    """A transition that must not happen.
 
-    def __init__(self, from_state: str | None, to_state: str) -> None:
+    Two shapes. Usually the `(from_state, to_state)` pair is simply absent from
+    TRANSITIONS. Sometimes the pair is legal but a precondition is not met —
+    `packet_ready` with no rendered resume — and `reason` carries that, because
+    "illegal transition job_approved -> packet_ready" would be a lie.
+    """
+
+    def __init__(
+        self, from_state: str | None, to_state: str, reason: str | None = None
+    ) -> None:
         self.from_state = from_state
         self.to_state = to_state
-        super().__init__(f"illegal transition {from_state or '—'} -> {to_state}")
+        super().__init__(reason or f"illegal transition {from_state or '—'} -> {to_state}")
 
 
 def allowed_from(state: str | None) -> list[str]:
@@ -158,7 +166,8 @@ def transition(
     now = occurred_at or config.utcnow()
     with transaction(conn):
         row = conn.execute(
-            "SELECT state, applied_at, first_response_at FROM applications WHERE id = ?",
+            "SELECT state, applied_at, first_response_at, resume_pdf IS NOT NULL AS has_pdf "
+            "FROM applications WHERE id = ?",
             (application_id,),
         ).fetchone()
         if row is None:
@@ -166,6 +175,24 @@ def transition(
 
         from_state = row["state"]
         _check(from_state, to_state)
+
+        # `packet_ready` means a tailored resume exists — that is the whole
+        # content of the state, and the dashboard shows a download button for it.
+        # The transition itself was reachable from the generic state panel, so a
+        # row could sit in `packet_ready` with `resume_pdf` NULL and a dead
+        # button. Observed on a real application, and the reason was that
+        # nothing linked to the packet page, so the state panel was the only
+        # control that looked like it would help.
+        if to_state == PACKET_READY and not row["has_pdf"]:
+            raise InvalidTransition(
+                from_state, to_state,
+                reason=(
+                    f"application {application_id} has no tailored resume, so it "
+                    f"cannot be {PACKET_READY!r}. Build the packet at "
+                    f"/packet/{application_id} — that renders the PDF and makes "
+                    f"this transition itself."
+                ),
+            )
 
         columns = ["state = ?", "updated_at = ?"]
         values: list[Any] = [to_state, now]

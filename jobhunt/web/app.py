@@ -591,11 +591,19 @@ JD_EXCERPT = 1200
 
 
 def _siblings(conn: sqlite3.Connection, application_id: int) -> list[int]:
-    """Other `scored` rows that are the same role at the same company.
+    """Undecided rows that are the same role at the same company.
 
     One company listing a role in nine cities is nine rows. They are genuinely
     nine postings — nine apply URLs, nine `apply_url_norm` keys — but they are
     one *shot*, and I will submit to exactly one of them.
+
+    `job_approved` is included, not just `scored`. The review queue collapses
+    duplicates before I see them, but siblings approved before that existed —
+    or approved from the pipeline table, which does not collapse — sit past
+    `scored` where nothing was closing them. Three copies of one Clera role
+    reached `packet_ready` that way. `packet_ready` is deliberately excluded:
+    a packet has a rendered resume and possibly my own edits behind it, so
+    retiring one is a decision to make on the packet page, not a side effect.
     """
     return [
         int(r["id"])
@@ -607,9 +615,10 @@ def _siblings(conn: sqlite3.Connection, application_id: int) -> list[int]:
               JOIN jobs oj      ON oj.company_id = j.company_id
                                AND oj.title_norm = j.title_norm
               JOIN applications other ON other.job_id = oj.id
-             WHERE a.id = ? AND other.id != a.id AND other.state = ?
+             WHERE a.id = ? AND other.id != a.id
+               AND other.state IN ('scored', 'job_approved')
             """,
-            (application_id, states.SCORED),
+            (application_id,),
         )
     ]
 
@@ -804,8 +813,26 @@ def _packet_context(conn: sqlite3.Connection, application_id: int) -> dict[str, 
             "reworded": sum(1 for d in diff if d["changed"]),
         }
 
+    # Same role, other cities, in any state. Shown rather than acted on: by the
+    # time a packet exists there is a rendered resume behind each one, and
+    # retiring a sibling is a decision, not a side effect.
+    duplicate_rows = conn.execute(
+        """
+        SELECT other.id, other.state, oj.location
+          FROM applications a
+          JOIN jobs j  ON j.id = a.job_id
+          JOIN jobs oj ON oj.company_id = j.company_id AND oj.title_norm = j.title_norm
+          JOIN applications other ON other.job_id = oj.id
+         WHERE a.id = ? AND other.id != a.id
+           AND other.state NOT IN ('skipped', 'filtered', 'expired')
+         ORDER BY other.id
+        """,
+        (application_id,),
+    ).fetchall()
+
     return {
         "page": "packet", "app": app, "where": where,
+        "duplicates": len(duplicate_rows), "duplicate_rows": duplicate_rows,
         "apply_url": row["apply_url"], "referral": row["referral"],
         "has_jd": bool((row["jd_text"] or "").strip()),
         "diff": diff, "pdf": pdf_meta, "error": None,

@@ -475,3 +475,13 @@ button.quiet-btn {
 table.answers .copyable { max-width: 46rem; white-space: pre-wrap; }
 .htmx-indicator { display: none; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
+
+/* ---- packet links ------------------------------------------------------- */
+a.packet-link { font-size: .78rem; margin-left: .4rem; white-space: nowrap; }
+a.button-ish {
+  display: inline-block; font: inherit; padding: .3rem .8rem; border-radius: 6px;
+  text-decoration: none; color: inherit;
+  border: 1px solid light-dark(#ccc, #444);
+}
+a.button-ish:hover { border-color: light-dark(#999, #666); }
+.notice.warn { background: light-dark(#fef3c7, #3a2f10); }

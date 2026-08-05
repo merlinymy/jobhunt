@@ -138,8 +138,17 @@ def insert_job(
 # ================================ applications ================================
 
 # Every list and detail view wants the same join. One string, one shape.
+# Explicit rather than `a.*`, to keep three large columns out of every row.
+# `resume_pdf` is ~30 KB, and the pipeline table selected it for every listed
+# application to answer a question a boolean answers. `resume_data` and
+# `answers_json` are the same shape of waste. The routes that genuinely need
+# the bytes — the PDF download and the packet diff — query for them directly.
 _APPLICATION_SELECT = """
-SELECT a.*,
+SELECT a.id, a.job_id, a.state, a.score, a.score_reasoning,
+       a.referral_contact_id, a.would_apply_anyway, a.applied_at,
+       a.first_response_at, a.outcome, a.created_at, a.updated_at,
+       a.resume_pdf IS NOT NULL  AS has_resume,
+       a.answers_json IS NOT NULL AS has_answers,
        j.title, j.location, j.remote, j.apply_url, j.apply_url_norm, j.source,
        j.comp_min, j.comp_max, j.posted_at, j.discovered_at, j.jd_text,
        c.id AS company_id, c.name AS company_name,

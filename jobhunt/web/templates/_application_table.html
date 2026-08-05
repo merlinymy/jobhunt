@@ -38,7 +38,16 @@
           {{ a.title }}
           {% if a.location %}<div class="dim">{{ a.location }}{% if a.remote and a.remote != 'unknown' %} · {{ a.remote }}{% endif %}</div>{% endif %}
         </td>
-        <td><span class="pill {{ a.state }}">{{ a.state.replace('_', ' ') }}</span></td>
+        <td>
+          <span class="pill {{ a.state }}">{{ a.state.replace('_', ' ') }}</span>
+          {# The packet is the whole point of these two states and had no link
+             anywhere outside the review card, which is gone the moment you
+             navigate away. That is how a `packet_ready` row with no resume got
+             created: the state panel was the only control that looked useful. #}
+          {% if a.state in ('job_approved', 'packet_ready') %}
+            <a class="packet-link" href="/packet/{{ a.id }}">packet →</a>
+          {% endif %}
+        </td>
         <td class="dim">{{ a.ats_type or '—' }}</td>
         <td class="dim">{{ a.source }}</td>
         <td class="mono dim">{{ (a.applied_at or '')[:10] or '—' }}</td>
