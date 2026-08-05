@@ -150,7 +150,12 @@ SELECT a.id, a.job_id, a.state, a.score, a.score_reasoning,
        a.resume_pdf IS NOT NULL  AS has_resume,
        a.answers_json IS NOT NULL AS has_answers,
        j.title, j.location, j.remote, j.apply_url, j.apply_url_norm, j.source,
-       j.comp_min, j.comp_max, j.posted_at, j.discovered_at, j.jd_text,
+       j.comp_min, j.comp_max, j.posted_at, j.discovered_at,
+       -- Not `j.jd_text`. Nothing that reads these rows renders a description —
+       -- the packet, scoring and tailoring each fetch it themselves — and at 4.7 KB
+       -- a row it was 2.4 MB of a 2.9 MB pipeline response, invisible while the
+       -- server rendered the HTML and ruinous the moment a phone had to download it.
+       length(j.jd_text) > 0 AS has_jd,
        c.id AS company_id, c.name AS company_name,
        ct.name AS referral_name, ct.channel AS referral_channel,
        ct.handle AS referral_handle
@@ -176,6 +181,12 @@ def _decorate(row: sqlite3.Row) -> dict[str, Any]:
     record["ats_slug"] = ats_slug
     record["next_states"] = states.allowed_from(record["state"])
     record["is_terminal"] = record["state"] in states.TERMINAL
+    # SQLite has no boolean, so these arrive as 0/1. Coerce here rather than
+    # leaving every caller to remember. `would_apply_anyway` is deliberately NOT
+    # in this list: None means unanswered, which is a third state the UI shows.
+    for flag in ("has_resume", "has_answers", "has_jd"):
+        if flag in record:
+            record[flag] = bool(record[flag])
     return record
 
 

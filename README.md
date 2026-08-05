@@ -8,53 +8,116 @@ only, runs on a Mac mini.
 material, and instruments the outcome. It never touches a form and never auto-submits — see
 [Why no browser automation](docs/architecture.md#why-no-browser-automation).
 
-> **Keep this repository private.** `docs/profile/` holds my legal name, email, phone, city,
-> pay expectations, full work history, and a contact network with other people's names in it. It is
-> committed on purpose — it's how profile data syncs between machines — which is exactly why the
-> repo cannot be public. Street address and EEO answers are deliberately *not* collected.
+> **This clone is configured for one person's data.** `docs/profile/` holds a legal name,
+> email, phone, city, pay expectations, full work history, and a contact network with other
+> people's names and email addresses in it. If you forked this to use yourself, replace that
+> directory with your own (`docs/profile.example/` is the template) or point
+> `JOBHUNT_PROFILE_DIR` somewhere outside the checkout. If it still holds someone else's data,
+> **keep the repository private** — the contact list is third-party personal data, and it is
+> not yours to publish.
 
 ## Status
 
-Phase 1 is done. Phase 2 is next and is gated on my own data entry, not on code.
-
 | Phase | | State |
 | --- | --- | --- |
-| 1 | DB, state machine, dashboard | **done** — backfill of hand-submitted applications still pending |
-| 2 | Profile store, resume tailoring | next — needs `docs/profile/experience.yaml` filled |
-| 3 | Answer bank, chat intake | not started |
-| 4 | Discovery, scoring, review queue | done, agents verified on a stand-in volume |
-| 5 | Gmail inbox poller | not started |
-
-Only two commands are implemented so far. The rest are declared in the `Makefile` as the
-interface to build against, and will fail with `ModuleNotFoundError` until their phase lands.
-
-| Command | | |
-| --- | --- | --- |
-| `make migrate` | apply `migrations/*.sql` in order | **live** |
-| `make dev` | dashboard on localhost:8000 | **live** |
-| `make load-profile` | import `docs/profile/*` into SQLite | Phase 2 |
-| `make tailor` | build packets for `job_approved` | Phase 2 |
-| `make chat` | resolve `unknown_questions`, append answers | Phase 3 |
-| `make ingest` | one-shot discovery run | Phase 4 |
-| `make score` | prefilter + LLM scoring | Phase 4 |
-| `make inbox` | poll Gmail, classify, update states | Phase 5 |
+| 1 | DB, state machine, dashboard | done |
+| 2 | Profile store, resume tailoring | done |
+| 3 | Answer bank, chat intake | done except the `chat` worker |
+| 4 | Discovery, scoring, review queue | done |
+| 5 | Gmail inbox poller | not started — `make inbox` will fail until it lands |
+| 6 | Interview prep | not started |
 
 ## Setup
 
-Python 3.12 via [uv](https://docs.astral.sh/uv/). Not pyenv, not conda.
+Requirements: macOS or Linux, Python 3.12 via [uv](https://docs.astral.sh/uv/) (not pyenv, not
+conda), Node 20+ for the frontend build, and an Anthropic API key. Nothing else — no Docker, no
+database server, no cloud account.
+
+### 1. Install
 
 ```bash
-make venv                     # uv venv --python 3.12, then installs the package
-cp .env.example .env          # then set JOBHUNT_DB to a path on LOCAL disk
-make migrate                  # creates the DB, WAL mode, applies 001_init.sql
-make dev                      # http://127.0.0.1:8000
+git clone <your fork> jobhunt && cd jobhunt
+make venv          # uv venv --python 3.12 + the package and its extras
+make build-web     # compiles the React app into jobhunt/web/dist
 ```
 
-`make` on its own lists every target. `make migrate` is idempotent — re-running it on an
-up-to-date DB prints `up to date` and changes nothing.
+### 2. Configure
 
-For local dev on a laptop, point `JOBHUNT_DB` at a throwaway file. The real database lives on
-the mini and only the mini's process opens it.
+```bash
+cp .env.example .env
+```
+
+Three things actually need a value; the rest have working defaults.
+
+| Variable | What to put | Why |
+| --- | --- | --- |
+| `JOBHUNT_DB` | An absolute path on a **local** disk | Where everything lives. Never iCloud Drive, Dropbox, or any sync folder — WAL plus file-level sync corrupts SQLite, and `db.connect()` refuses such a path outright. A plain `~/jobhunt/jobhunt.db` is fine; an external SSD is what this repo's owner uses, and that path gets extra mount checks. |
+| `ANTHROPIC_API_KEY` | A key from [console.anthropic.com](https://console.anthropic.com) | Scoring, tailoring and answer drafting are all model calls. Measured cost is roughly $8–14/month at ~100 applications. Without it, discovery and the dashboard still work; scoring and tailoring do not. |
+| `JOBHUNT_PROFILE_DIR` | Leave blank unless your profile lives outside the repo | Defaults to `docs/profile/`. |
+
+If the database goes on an external volume, run `./deploy/install.sh --init-volume` once and
+paste the `JOBHUNT_DB_VOLUME_ID` it prints into `.env`. That stamps the disk so an unmounted
+volume — or a *different* disk mounted at the same path — is refused rather than silently
+written to. See [`docs/deploy-mini.md`](docs/deploy-mini.md).
+
+### 3. Your profile
+
+This is the part that takes real time, and it is the part that decides output quality.
+Everything the system writes is drawn from these files; nothing is invented.
+
+```bash
+cp -r docs/profile.example docs/profile
+```
+
+| File | Required? | What it is |
+| --- | --- | --- |
+| `facts.yaml` | **yes** | Identity for the resume header, plus the answers you would otherwise improvise differently each time — work authorisation, notice period, walk-away comp. Returned verbatim, never paraphrased by a model. |
+| `experience.yaml` | **yes** | The corpus: roles, projects, and one bullet per thing you actually did. The tailor may select, reorder and reword these; it may never introduce an employer, title, date, degree or metric that is not here, and a validator raises if it tries. Write the complete truth and let it cut. |
+| `scoring.yaml` | **yes** | What you will and will not take. Title keywords and seniority are the only hard filters; location only *ranks*, and the list ends in a catch-all so it never rejects. |
+| `contacts.csv` | optional | People you know, for the referral flag on the review queue. A referral is the single biggest lever on interview rate, so this earns its keep — but the system works fine without it. |
+| `Connections.csv` | optional | A LinkedIn connections export, if you have one. Same loader. Manual one-time export only; there is no LinkedIn automation here and there will not be. |
+| `stories.md` | optional | Behavioural-interview stories. Only used by Phase 6. |
+| `intake-answers.md` | optional | Your working copy of [`docs/intake.md`](docs/intake.md), the questionnaire that produces the files above. Not read by the code. |
+
+Then load them:
+
+```bash
+make migrate        # creates the database and applies every migration
+make load-profile   # imports docs/profile/* — idempotent, safe to re-run
+make doctor         # says whether anything is missing
+```
+
+### 4. Run it
+
+```bash
+make dev            # http://127.0.0.1:8000
+make ingest         # find postings   (needs config/searches.yaml — see below)
+make score          # prefilter, then LLM scoring on what survives
+```
+
+Discovery reads `config/searches.yaml` for the search terms and the list of company job boards
+to poll. The one in this repo is tuned for its owner's search; edit it before your first
+`make ingest` or you will get someone else's jobs.
+
+Then open the dashboard, work `/review`, approve what you would genuinely apply to, and build a
+packet. **You submit every application yourself.** The system never touches a form.
+
+### Working on the frontend
+
+```bash
+make dev            # API on 8000
+make dev-web        # Vite on 5173, proxying /api to 8000 — browse this one
+make check-web      # eslint + tsc
+```
+
+`make build-web` writes into `jobhunt/web/dist`, which is gitignored and rebuilt on the host.
+The running server picks up a new build on the next request; no restart needed.
+
+### Running it permanently
+
+[`docs/deploy-mini.md`](docs/deploy-mini.md) is the runbook for an always-on host: three launchd
+agents, nightly verified backups, and HTTPS over Tailscale so the review queue works from a
+phone. It is macOS-specific.
 
 ## How it works
 
@@ -164,3 +227,9 @@ There is deliberately no test suite. Correctness lives in schema constraints and
 assertions, and everything else is verified by hand against real data. Three exceptions are
 table-driven with real fixtures: URL normalization, ATS detection, and the tailoring validator
 — which must reject an invented employer, a shifted date, or an inflated metric.
+
+```bash
+make test        # the two Python suites (standalone scripts, not pytest)
+make check-web   # eslint + tsc on the frontend
+make doctor      # is this deployment healthy
+```

@@ -1,0 +1,68 @@
+# Fact-tier answers. Three jobs, now that form filling is manual:
+#
+#   1. `identity` feeds the RESUME HEADER. RenderCV requires it. Not optional.
+#   2. `decided_once` holds answers I'd otherwise improvise differently each time.
+#   3. `comp` holds my walk-away number. Every other figure is decided per company.
+#
+# Deliberately NOT here: street address, EEO responses, travel %, "how did you hear",
+# license numbers, driver's license. A password manager's identity autofill already
+# handles those better than this app would, and nobody cross-references them.
+# The test for adding a field: would I have to DECIDE or LOOK UP the answer? If I'd
+# just type it from memory, it doesn't belong.
+#
+# Also NOT here: gaps and references. Gaps don't apply. References are people, so they
+# live in contacts.csv with the rest of the network.
+
+identity: # → resume header
+  legal_name: "" # as on ID and tax documents
+  preferred_name: ""
+  email: ""
+  phone: ""
+  city: ""
+  state: ""
+  linkedin: ""
+  github: ""
+  website: ""
+
+decided_once: # → packet answer set; consistency matters
+  # Knockout questions. Wrong or inconsistent answers here end applications.
+  work_authorized_us: "yes" # exact yes/no
+  requires_sponsorship: "no" # exact yes/no
+  visa_note: "" # type, expiry, timeline pressure — omit if N/A
+
+  # Comp lives in the top-level `comp:` block — it moves with market,
+  # arrangement, and level, so one number here was wrong somewhere by design.
+
+  earliest_start: ""
+  notice_period: ""
+
+  onsite_tolerance: "onsite-ok" # remote-only | hybrid-2 | hybrid-3 | onsite-ok
+  relocation: "yes" # no | yes-with-assistance | yes
+  relocation_metros: [California, Boston, Chicago, Seattle, Atlanta]
+
+  clearance: "" # omit unless you hold one or they'll ask
+
+# ============================== COMP ==============================
+# Comp never filters a posting. This block exists so I answer consistently.
+#
+# walk_away — MINE. Hand-written, never generated. Below this I don't take the job,
+#             anywhere. Not a market question, so it IS decidable now. It does not
+#             reject postings; it tells me when to leave a conversation.
+#
+# Everything city-specific is decided at packet time: research prices the role for
+# that job's market, I pick the figure, and it's stored per company in `answers`
+# (fact tier, verbatim) then frozen into `answers_json` on submit. So the number I
+# give one employer stays the same across every application to them, without
+# pre-committing to a number for cities I haven't seen a job in.
+comp:
+  walk_away:
+
+  # Research can't price a role without knowing which role. ONE canonical role, not a
+  # list of title variants — the market prices by level and city, and full-stack /
+  # frontend / backend at the same level in the same metro land within noise of each
+  # other. Title variants belong in scoring.yaml, which matches postings, not prices.
+  research:
+    role: "" # e.g. "Software Engineer" — what the market would call this job
+    level: "" # entry | mid | senior | staff — as the market words it, not internal titles
+    refresh_days: "" # flag a researched figure stale past this
+

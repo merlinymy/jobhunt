@@ -1,0 +1,63 @@
+# Experience corpus — intake sections C and D. Feeds `experiences`, `bullets`, `projects`.
+# The tailor can only SELECT from what's here. Capture 3-5x more than fits on a resume.
+# Target 8-12 bullets per significant role. The resume will use 3-5.
+# A bullet without a number is nearly unusable. How many, how much, how long,
+# before vs after.
+#
+# =====================================================================================
+# PROVENANCE. Two kinds live in this file and must never be conflated:
+#
+#   `# evidence: <file:line>` or a git command  -> re-derivable from a repo, today.
+#   `# source: human testimony (A<n>/AA<n>)`    -> my word only. No artifact backs it.
+#
+# The tailoring validator checks that a resume traces back to these rows. It does NOT
+# check that these rows are true. That makes this file the last honest checkpoint, and
+# the reason the distinction above is kept rather than flattened.
+#
+# Assembled 2026-07-31/08-01 from seven repos under ~/projects/oldProjects, plus my
+# answers A1-A30 and AA1-AA17 (see out/experience.questions.md, out/arc.questions.md).
+# Repo dates are COMMIT dates, not engagement dates.
+#
+# Exclusion notes are load-bearing: where a figure appears in a comment marked EXCLUDED
+# or CAUTION, it is there so it does not get quietly reintroduced later. Do not promote
+# one into a bullet without re-deriving it.
+# =====================================================================================
+
+experiences:
+  - company: "Acme Corp"
+    title: "Software Engineer"
+    location: "Remote"
+    employment_type: "full-time"     # full-time | contract | internship | freelance
+    start_month: "2023-06"
+    end_month: ""                    # blank means current
+    solo: false                      # true if nobody else worked on it
+    tech: ["Python", "PostgreSQL", "FastAPI"]
+    bullets:
+      # One factual record per bullet. The tailor may select, reorder and reword
+      # these; it may never introduce an employer, title, date, degree or metric
+      # that is not here. Write the complete truth and let it cut.
+      - text: "Rebuilt the order-import pipeline to process 40,000 rows a night, replacing a cron job that timed out roughly weekly."
+        shared: false                # true if credit belongs to a team
+        # evidence: link, commit, or where you would point to prove this
+
+projects:
+  - name: "Some Side Project"
+    url: "https://github.com/you/project"
+    role: "Sole author"
+    start_month: "2024-01"
+    end_month: "2024-04"
+    solo: true
+    tech: ["TypeScript", "SQLite"]
+    bullets:
+      - text: "Shipped a CLI that turns a folder of PDFs into a searchable index, used daily by two researchers."
+        shared: false
+
+education:
+  - school: "Some University"
+    degree: "BS"
+    field: "Computer Science"
+    start_month: "2019-09"
+    end_month: "2023-05"
+
+credentials: []                      # certifications, licences
+languages: []                        # human languages, if a form asks

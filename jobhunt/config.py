@@ -29,7 +29,12 @@ _load_env(REPO_ROOT / ".env")
 
 DB_PATH = Path(os.environ.get("JOBHUNT_DB") or REPO_ROOT / "jobhunt.db").expanduser()
 MIGRATIONS_DIR = REPO_ROOT / "migrations"
-PROFILE_DIR = REPO_ROOT / "docs" / "profile"
+# Your data, not the repo's. Overridable so a fork can keep its profile outside
+# the checkout entirely — the files hold a legal name, a phone number, and a
+# contact network of other people, none of which belongs in a public clone.
+PROFILE_DIR = Path(
+    os.environ.get("JOBHUNT_PROFILE_DIR") or REPO_ROOT / "docs" / "profile"
+).expanduser()
 MODELS_YAML = REPO_ROOT / "config" / "models.yaml"
 PROMPTS_DIR = REPO_ROOT / "config" / "prompts"
 OUT_DIR = REPO_ROOT / "out"

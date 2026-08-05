@@ -1,0 +1,63 @@
+# Scoring config — intake section B. Consumed by `score` pass 1 (deterministic).
+# If the digest feels wrong, tune THIS file, not the LLM prompt.
+#
+# What actually REJECTS a posting: title blocklist, seniority band, company blocklist,
+# tech dealbreakers, and the hard exclusions. That's it. Title and level are what I
+# filter on; everything else either ranks or informs.
+#
+# What only RANKS: location (see location_rank). Comp doesn't even rank — it's not here.
+
+# A posting passes if its title contains ANY keyword below and NONE of titles_block.
+# Substring, case-insensitive. Keep both lists short and wide — an exact-match
+# allowlist silently drops variants nobody thought to enumerate ("Software
+# Development Engineer II", "Member of Technical Staff"), and a dropped posting is a
+# lost shot. Discipline (frontend / backend / full-stack) is NOT filtered on: it's
+# fit, which Pass 2 scores and I judge in the digest.
+title_keywords:
+  - "software engineer"
+  - "backend"
+  - "full stack"
+titles_block:
+  - "sales"
+  - "recruiter"
+  - "principal"
+seniority: [entry, junior, mid, senior]
+
+# `level_tolerance` deleted. It existed to say how far over or under the band
+# you'd stretch; naming the acceptable levels outright says the same thing
+# without a second number to keep in step.
+
+# Comp is deliberately NOT a filter. Most postings don't state a range, and the ones
+# that do are concentrated in states with pay-transparency laws — filtering on it
+# under-samples everywhere else for reasons unrelated to the jobs. My walk-away number
+# lives in facts.yaml `comp:` and exists to answer with, not to reject on. When a
+# posting does state a range, the digest shows it and I skip it myself.
+
+# Location RANKS, it does not filter. The list ends in a catch-all, so no posting is
+# rejected for where it is — better locations just sort higher in the digest.
+# Digest order: location tier first, then LLM score within a tier.
+# Edit the order freely; the list order IS the preference.
+location_rank:
+  - "Remote"
+  - "Your City, ST"
+  - "*"   # catch-all: never rejects, only ranks
+
+timezone_constraint: ""     # only meaningful for remote postings
+
+company_size: ""
+stages: []                  # seed, series-a, growth, public, ...
+industries_want: []
+industries_refuse: []
+companies_block: []         # competitors, past employers, hard nos
+
+tech_required: []           # must appear in the JD
+tech_dealbreakers: []
+
+exclusions:
+  staffing_agencies: true
+  clearance_required: true
+  unpaid: true
+  commission_only: true
+  heavy_oncall: false
+
+jd_yoe_range: ""            # YOE range in the JD you'll still apply to
