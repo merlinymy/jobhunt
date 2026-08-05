@@ -647,3 +647,146 @@ def bullets_by_id(conn: sqlite3.Connection, ids: list[int]) -> dict[int, sqlite3
     marks = ", ".join("?" for _ in ids)
     rows = conn.execute(f"SELECT * FROM bullets WHERE id IN ({marks})", tuple(ids)).fetchall()
     return {int(row["id"]): row for row in rows}
+
+
+# ============================== the web layer's ==============================
+#
+# SQL that used to sit inline in web/app.py. Moved here when the JSON API landed:
+# two callers rendering the same rows is exactly when "parameterized SQL in named
+# functions" stops being style and starts being the thing that keeps them honest.
+
+
+def sibling_application_ids(conn: sqlite3.Connection, application_id: int) -> list[int]:
+    """Undecided rows that are the same role at the same company.
+
+    One company listing a role in nine cities is nine rows. They are genuinely
+    nine postings — nine apply URLs, nine `apply_url_norm` keys — but one *shot*,
+    and exactly one gets submitted.
+
+    `job_approved` is included, not just `scored`: the review queue collapses
+    duplicates before they are seen, but siblings approved before that existed —
+    or approved from the pipeline table, which does not collapse — sit past
+    `scored` where nothing was closing them. `packet_ready` is deliberately
+    excluded, because a packet has a rendered resume behind it and retiring one
+    is a decision, not a side effect.
+    """
+    return [
+        int(row["id"])
+        for row in conn.execute(
+            """
+            SELECT other.id
+              FROM applications a
+              JOIN jobs j       ON j.id = a.job_id
+              JOIN jobs oj      ON oj.company_id = j.company_id
+                               AND oj.title_norm = j.title_norm
+              JOIN applications other ON other.job_id = oj.id
+             WHERE a.id = ? AND other.id != a.id
+               AND other.state IN ('scored', 'job_approved')
+            """,
+            (application_id,),
+        )
+    ]
+
+
+def scored_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Everything in `scored`, with the one referral name that matters per row."""
+    return conn.execute(
+        """
+        SELECT a.id AS application_id, a.score, a.score_reasoning,
+               j.title, j.title_norm, j.company_id, j.location, j.remote,
+               j.apply_url, j.jd_text, j.comp_min, j.comp_max, c.name AS company,
+               (SELECT ct.name FROM contacts ct
+                 WHERE ct.company_id = c.id AND ct.do_not_contact = 0
+                 ORDER BY ct.id LIMIT 1) AS referral
+          FROM applications a
+          JOIN jobs j      ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.state = ?
+        """,
+        (states.SCORED,),
+    ).fetchall()
+
+
+def packet_row(conn: sqlite3.Connection, application_id: int) -> sqlite3.Row | None:
+    """Posting fields and stored resume JSON for one packet view."""
+    return conn.execute(
+        """
+        SELECT j.apply_url, j.jd_text, j.location, j.remote, a.resume_data,
+               (SELECT ct.name FROM contacts ct
+                 WHERE ct.company_id = j.company_id AND ct.do_not_contact = 0
+                 ORDER BY ct.id LIMIT 1) AS referral
+          FROM applications a JOIN jobs j ON j.id = a.job_id
+         WHERE a.id = ?
+        """,
+        (application_id,),
+    ).fetchone()
+
+
+def duplicate_listings(conn: sqlite3.Connection, application_id: int) -> list[sqlite3.Row]:
+    """Same role, other cities, in any live state. Shown, never acted on."""
+    return conn.execute(
+        """
+        SELECT other.id, other.state, oj.location
+          FROM applications a
+          JOIN jobs j  ON j.id = a.job_id
+          JOIN jobs oj ON oj.company_id = j.company_id AND oj.title_norm = j.title_norm
+          JOIN applications other ON other.job_id = oj.id
+         WHERE a.id = ? AND other.id != a.id
+           AND other.state NOT IN ('skipped', 'filtered', 'expired')
+         ORDER BY other.id
+        """,
+        (application_id,),
+    ).fetchall()
+
+
+def company_id_for_application(conn: sqlite3.Connection, application_id: int) -> int | None:
+    row = conn.execute(
+        "SELECT j.company_id FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.id = ?",
+        (application_id,),
+    ).fetchone()
+    return None if row is None else int(row["company_id"])
+
+
+def answer_context(conn: sqlite3.Connection, application_id: int) -> sqlite3.Row | None:
+    """Company, title and JD — what drafting one narrative answer needs."""
+    return conn.execute(
+        """
+        SELECT j.company_id, j.title, j.jd_text, c.name AS company
+          FROM applications a JOIN jobs j ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.id = ?
+        """,
+        (application_id,),
+    ).fetchone()
+
+
+def resume_pdf_bytes(conn: sqlite3.Connection, application_id: int) -> bytes | None:
+    """The stored bytes, never a re-render — see .claude/rules/data-layer.md."""
+    row = conn.execute(
+        "SELECT resume_pdf FROM applications WHERE id = ?", (application_id,)
+    ).fetchone()
+    return None if row is None else row["resume_pdf"]
+
+
+def corpus_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        "bullets": conn.execute("SELECT COUNT(*) AS n FROM bullets").fetchone()["n"],
+        "experiences": conn.execute("SELECT COUNT(*) AS n FROM experiences").fetchone()["n"],
+        "projects": conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"],
+    }
+
+
+def unknown_question_count(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("SELECT COUNT(*) AS n FROM unknown_questions").fetchone()["n"])
+
+
+def application_for_job(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:
+    """The application already tracking this job, for the duplicate URL check."""
+    return conn.execute(
+        "SELECT id, state FROM applications WHERE job_id = ?", (job_id,)
+    ).fetchone()
+
+
+def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """`sqlite3.Row` is not JSON-serializable. Convert at the boundary, once."""
+    return [dict(row) for row in rows]

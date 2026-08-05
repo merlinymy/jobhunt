@@ -44,7 +44,7 @@
       <tbody>
         {% for row in diff %}
           <tr class="{{ 'changed' if row.changed else 'same' }}">
-            <td class="mono">{{ row.bullet_id }}</td>
+            <td class="mono">{{ row.bullet_id if row.bullet_id is not none else "—" }}</td>
             {% if row.changed %}
               <td class="before">{{ row.before }}</td>
               <td class="after">{{ row.after }}</td>

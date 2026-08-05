@@ -19,8 +19,8 @@
 <section class="fill">
   <h2>Identity</h2>
   <table class="fields">
-    {% for label, value in identity %}
-      <tr><th>{{ label }}</th><td>{{ copy(value) }}</td></tr>
+    {% for field in identity %}
+      <tr><th>{{ field.label }}</th><td>{{ copy(field.value) }}</td></tr>
     {% endfor %}
   </table>
 </section>
