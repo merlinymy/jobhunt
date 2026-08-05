@@ -10,30 +10,25 @@ material, and instruments the outcome. It never touches a form and never auto-su
 
 ## Personal data
 
-`docs/profile/` is **untracked**. It holds a legal name, email, phone, city, pay expectations,
-a full work history, and `Connections.csv` — 345 other people's names, LinkedIn URLs and email
-addresses. That last file is third-party personal data and is not the author's to publish, so
-it does not belong in a repository that might ever go public.
+`docs/profile/` is **untracked**, and that is deliberate. It holds a legal name, email, phone,
+city, pay expectations, a full work history, and — if you export one — a LinkedIn connections
+file with other people's names and email addresses in it. That last one is third-party
+personal data and is not yours to publish, so none of it belongs in a repository.
 
 - `docs/profile.example/` is the committed template. `cp -r docs/profile.example docs/profile`.
 - `JOBHUNT_PROFILE_DIR` moves the real files outside the checkout entirely.
 - It used to sync between machines through git. It now syncs with `make profile-push` and
   `make profile-pull` over Tailscale.
 
-> **Untracking is not erasure.** Every commit before 2026-08-05 still contains these files, so
-> `git log -p -- docs/profile/` reproduces all of it, and so does any existing clone or fork.
-> **This repository must stay private until that history is purged.** To purge it:
->
-> ```bash
-> pipx run git-filter-repo --invert-paths --path docs/profile/
-> git remote add origin <url>          # filter-repo drops the remote deliberately
-> git push --force --all && git push --force --tags
-> ```
->
-> That rewrites every commit hash. Re-clone anywhere else you have this checked out. On GitHub,
-> also delete any forks and ask support to garbage-collect the old objects, since unreferenced
-> commits stay reachable by SHA for a while. Treat anything already pushed — especially other
-> people's contact details — as needing that cleanup, not just a `.gitignore` entry.
+This repository's history is clean: `docs/profile/` has never existed in any commit here, and
+the phone number, school and personal email that appeared in a few source comments were replaced
+throughout. It was filtered out of a private predecessor with `git filter-repo` and verified by
+scanning every blob of every commit.
+
+If you fork this and add your own profile, note that a `.gitignore` entry only stops *future*
+commits. Anything already committed stays in history and needs `git filter-repo --invert-paths
+--path docs/profile/` plus a force-push — and on GitHub, deleting forks and asking support to
+garbage-collect, since unreferenced commits stay reachable by SHA for a while.
 
 ## Status
 
