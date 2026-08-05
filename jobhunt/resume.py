@@ -121,10 +121,10 @@ def _dates(start: str | None, end: str | None) -> dict[str, Any]:
 def _phone(raw: str) -> str:
     """RenderCV validates phone numbers and rejects the human-readable form.
 
-    facts.yaml holds `555-123-4567` because that is what a person writes down;
-    RenderCV wants E.164. Convert here rather than making the profile file store
-    a format only one consumer cares about. Anything that is not plainly a US
-    ten-digit number is passed through for RenderCV to judge and report.
+    facts.yaml holds something like `555-123-4567` because that is what a person
+    writes down; RenderCV wants E.164. Convert here rather than making the profile
+    file store a format only one consumer cares about. Anything that is not plainly
+    a US ten-digit number is passed through for RenderCV to judge and report.
     """
     text = raw.strip()
     digits = re.sub(r"\D", "", text)

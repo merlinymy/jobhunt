@@ -56,6 +56,15 @@ rmdir /Volumes/jobhunt
 git clone git@github.com:merlinymy/jobApplicationHelper.git ~/projects/jobApplicationHelper
 cd ~/projects/jobApplicationHelper
 make venv          # installs the extras; a bare install dies at 06:30 on `import jobspy`
+make build-web     # Node 20+; compiles the React app into jobhunt/web/dist
+```
+
+**If this machine already had a checkout from before 2026-08-05, back up `docs/profile/`
+before pulling.** That commit untracked it, and git deletes a file a commit removes — the
+`.gitignore` entry does not protect a copy that is already tracked in your checkout:
+
+```bash
+cp -a docs/profile ~/profile-backup && git pull && cp -a ~/profile-backup/. docs/profile/
 ```
 
 The repo stays on the internal disk deliberately. On the SSD, launchd could not exec the agents
@@ -78,6 +87,18 @@ Set `ANTHROPIC_API_KEY`. Leave `JOBHUNT_DB=/Volumes/jobhunt/jobhunt.db` and
 
 Paste the `JOBHUNT_DB_VOLUME_ID` it prints into `.env`. This is what lets the guard tell your
 disk from any other volume that happens to mount at the same path.
+
+## 6b. Your profile
+
+`docs/profile/` is untracked, so a fresh clone does not have it. Push it from the laptop:
+
+```bash
+# on the laptop
+make profile-push HOST=jobhunt-mini
+```
+
+Or start from the template — `cp -r docs/profile.example docs/profile` — and fill it in.
+`make load-profile` fails with the exact command if the directory is missing.
 
 ## 7. Seed
 

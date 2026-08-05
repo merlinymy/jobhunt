@@ -142,9 +142,13 @@ the app.** It holds the DB, the launchd jobs, and the dashboard. The laptops are
   `.env` and silently splits the agents onto a second database.
 - **One writer host.** Laptops read and write through the mini's HTTP API over Tailscale,
   never by opening the DB file over a share. For local dev, use a throwaway seeded DB.
-- Profile data syncs between machines through git (`docs/profile/`), not through the DB.
-  Keep this repo **private** — those files hold my legal name, email, phone, city, pay expectations,
-  full work history, and a contact network with other people's names in it.
+- **`docs/profile/` is untracked.** It holds my legal name, email, phone, city, pay
+  expectations, full work history, and 345 other people's names and email addresses —
+  third-party data that is not mine to publish. It syncs between machines with
+  `make profile-push` / `make profile-pull` over the tailnet, not through git and not
+  through the DB. `docs/profile.example/` is the committed template.
+  Untracking does not erase history: the files are still in every commit before
+  2026-08-05, so the repo stays private unless that history is purged.
 - On the mini: launchd, not cron or systemd. Scheduled jobs need a logged-in GUI session, so
   an unattended reboot with no auto-login brings nothing back — and leaves the encrypted SSD
   locked as well.

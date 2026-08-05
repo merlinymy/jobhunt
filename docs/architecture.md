@@ -208,8 +208,9 @@ Three dev machines, one host.
   database on an external APFS-encrypted SSD at `/Volumes/jobhunt`. Always on, sleep disabled.
   Three launchd agents live in `deploy/` and are installed with `make install-agents`, which
   refuses to proceed without confirming this is the mini.
-- **Laptops (8 GB, 24 GB)** — dev clients. Clone the repo, edit code and `docs/profile/`,
-  push through git. To use the app, open the mini's dashboard over Tailscale.
+- **Laptops (8 GB, 24 GB)** — dev clients. Clone the repo, edit code and push through git;
+  edit `docs/profile/` and push it with `make profile-push`, since it is not in git. To use
+  the app, open the mini's dashboard over Tailscale.
 
 The repo stays on the internal disk deliberately. If it lived on the SSD, launchd could not
 even exec the agents when that disk is absent, and you would get no log explaining why.
@@ -266,9 +267,12 @@ needs a secure context, which `http://100.x.x.x:8000` is not.
   page, keeps a grandfather-father-son set, and refuses to prune when a verify fails. A weekly
   drill migrates a copy to prove a restore would actually work. The laptop pulls with `rsync`
   over the tailnet.
-- **Profile data syncs via git**, which is the reason `docs/profile/` is committed rather than
-  living only in the DB. Keep the repo private — those files contain my legal name, email,
-  phone, city, pay expectations, full work history, and a contact network with other people's
-  names in it. Street address and EEO answers are deliberately not collected.
+- **Profile data is untracked and syncs over the tailnet** (`make profile-push` /
+  `make profile-pull`), not through git and not through the DB. `docs/profile/` holds a
+  legal name, email, phone, city, pay expectations, full work history, and a contact list
+  of other people — the last of which is third-party data and not ours to publish. Street
+  address and EEO answers are deliberately not collected. The committed template is
+  `docs/profile.example/`; `JOBHUNT_PROFILE_DIR` moves the real files out of the checkout
+  entirely. Note that untracking is not erasure — see README, "Personal data".
 - **`CLAUDE.local.md` is per-machine** and gitignored, so each Mac carries its own paths. The
   8 GB laptop should not attempt to run anything heavier than the editor.

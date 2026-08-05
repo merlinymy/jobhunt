@@ -52,7 +52,14 @@ class ProfileError(RuntimeError):
 
 def _read_yaml(path: Path) -> Any:
     if not path.exists():
-        raise ProfileError(f"{path} is missing. See docs/intake.md.")
+        # `docs/profile/` is untracked, so a fresh clone genuinely has none of
+        # this. Name the way out rather than just the missing file.
+        raise ProfileError(
+            f"{path} is missing.\n"
+            f"  First run?  cp -r docs/profile.example {config.PROFILE_DIR}\n"
+            f"  Then fill it in — docs/intake.md is the questionnaire.\n"
+            f"  Profile lives elsewhere? Set JOBHUNT_PROFILE_DIR."
+        )
     try:
         return yaml.safe_load(path.read_text())
     except yaml.YAMLError as exc:

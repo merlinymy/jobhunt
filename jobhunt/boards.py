@@ -30,6 +30,7 @@ from __future__ import annotations
 import html
 import json
 import random
+import os
 import re
 import threading
 import time
@@ -42,7 +43,12 @@ from typing import Any, Callable
 # Identifies the client honestly and says how to stop it. These are free public
 # endpoints run by vendors who owe us nothing; a contactable UA is the least a
 # polite client does, and it is what gets a warning instead of a block.
-USER_AGENT = "jobhunt/0.1 (personal job search, ~1 run per 12h; contact via github.com/merlinymy)"
+#
+# Set JOBHUNT_CONTACT so a fork identifies itself rather than whoever wrote this.
+USER_AGENT = (
+    "jobhunt/0.1 (personal job search, ~1 run per 12h; "
+    f"contact {os.environ.get('JOBHUNT_CONTACT') or 'https://github.com/merlinymy/jobApplicationHelper'})"
+)
 TIMEOUT = 25
 
 # Minimum seconds between requests to the same host, per host.

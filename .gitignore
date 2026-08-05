@@ -3,6 +3,19 @@
 credentials.json
 token.json
 
+# personal data — untracked as of 2026-08-05.
+#
+# These files hold a legal name, email, phone, city, pay expectations, a full
+# work history, and a contact list of other people's names and email addresses.
+# That last one is third-party personal data and is not ours to publish, so it
+# does not belong in a repository that might ever go public.
+#
+# docs/profile.example/ is the committed template. Set JOBHUNT_PROFILE_DIR to
+# keep the real files somewhere else entirely.
+#
+# NOTE: untracking does not erase history. See README, "Personal data".
+docs/profile/
+
 # database — holds every submitted PDF; back up off-box, never commit
 *.db
 *.db-wal

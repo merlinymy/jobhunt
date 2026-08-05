@@ -8,13 +8,32 @@ only, runs on a Mac mini.
 material, and instruments the outcome. It never touches a form and never auto-submits — see
 [Why no browser automation](docs/architecture.md#why-no-browser-automation).
 
-> **This clone is configured for one person's data.** `docs/profile/` holds a legal name,
-> email, phone, city, pay expectations, full work history, and a contact network with other
-> people's names and email addresses in it. If you forked this to use yourself, replace that
-> directory with your own (`docs/profile.example/` is the template) or point
-> `JOBHUNT_PROFILE_DIR` somewhere outside the checkout. If it still holds someone else's data,
-> **keep the repository private** — the contact list is third-party personal data, and it is
-> not yours to publish.
+## Personal data
+
+`docs/profile/` is **untracked**. It holds a legal name, email, phone, city, pay expectations,
+a full work history, and `Connections.csv` — 345 other people's names, LinkedIn URLs and email
+addresses. That last file is third-party personal data and is not the author's to publish, so
+it does not belong in a repository that might ever go public.
+
+- `docs/profile.example/` is the committed template. `cp -r docs/profile.example docs/profile`.
+- `JOBHUNT_PROFILE_DIR` moves the real files outside the checkout entirely.
+- It used to sync between machines through git. It now syncs with `make profile-push` and
+  `make profile-pull` over Tailscale.
+
+> **Untracking is not erasure.** Every commit before 2026-08-05 still contains these files, so
+> `git log -p -- docs/profile/` reproduces all of it, and so does any existing clone or fork.
+> **This repository must stay private until that history is purged.** To purge it:
+>
+> ```bash
+> pipx run git-filter-repo --invert-paths --path docs/profile/
+> git remote add origin <url>          # filter-repo drops the remote deliberately
+> git push --force --all && git push --force --tags
+> ```
+>
+> That rewrites every commit hash. Re-clone anywhere else you have this checked out. On GitHub,
+> also delete any forks and ask support to garbage-collect the old objects, since unreferenced
+> commits stay reachable by SHA for a while. Treat anything already pushed — especially other
+> people's contact details — as needing that cleanup, not just a `.gitignore` entry.
 
 ## Status
 
@@ -217,9 +236,9 @@ These raise at runtime rather than living only in a document:
 Three Macs, one host. Only the **Mac mini** runs the app — the repo on its internal disk, the
 database on an external encrypted SSD, three launchd agents (discovery, dashboard, backup),
 and sleep disabled so the scheduled runs fire. The laptops are dev clients: edit code and
-profile data, push through git, and reach the dashboard over Tailscale Serve at
-`https://jobhunt-mini.<tailnet>.ts.net`. Profile data syncs via git, never through the
-database. `make doctor` says whether the host is healthy.
+code, and reach the dashboard over Tailscale Serve at
+`https://jobhunt-mini.<tailnet>.ts.net`. Profile data is not in git — `make profile-push`
+moves it over the tailnet instead. `make doctor` says whether the host is healthy.
 
 ## Tests
 
