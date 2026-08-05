@@ -882,6 +882,46 @@ def serve(*, reload: bool = False, wait_for_db: float = 0.0) -> None:
     )
 
 
+# ==================================== spa ====================================
+#
+# Registered last, deliberately. Starlette matches routes in declaration order,
+# so being last is the real guard that this cannot shadow /api, /static, or any
+# Jinja page — the prefix check below is the backstop, not the mechanism.
+
+DIST = HERE / "dist"
+
+if (DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
+
+
+@app.get("/app/{full_path:path}", include_in_schema=False)
+@app.get("/app", include_in_schema=False)
+def spa(full_path: str = "") -> Response:
+    """The React shell, mounted at /app until it replaces the Jinja pages.
+
+    Assets are served from /assets by their own mount rather than from under
+    this prefix, so moving the shell to `/` at the end is a routing change with
+    no rebuild.
+    """
+    if full_path.startswith(("api/", "assets/")):
+        # Without this an unknown endpoint returns index.html with a 200, which
+        # looks like "the app loaded but did nothing" instead of a 404.
+        raise HTTPException(404, "no such endpoint")
+
+    candidate = (DIST / full_path).resolve()
+    if full_path and DIST.resolve() in candidate.parents and candidate.is_file():
+        return FileResponse(candidate)  # favicon, manifest, anything else in dist/
+
+    index = DIST / "index.html"
+    if not index.is_file():
+        return PlainTextResponse(
+            "No frontend build here yet. Run `make build-web`.", status_code=503
+        )
+    # A cached index pointing at hashed assets that no longer exist is the
+    # classic white screen after a deploy. The assets themselves are immutable.
+    return FileResponse(index, headers={"Cache-Control": "no-store"})
+
+
 def run_dev() -> None:
     """`make dev`. Auto-reload; never what the launchd agent runs."""
     serve(reload=True)

@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* Theming carried forward from the old stylesheet, which had the right idea:
+ * every token is a light-dark() pair, so the palette is declared once and
+ * `color-scheme` decides which half applies. :root follows the OS; data-theme
+ * pins one. No duplicated blocks, no second palette to keep in step.
+ *
+ * The rule that matters for components: there are no hex values below this
+ * block. The old file drifted into two systems — tokens for the first 373 lines
+ * and inline light-dark(#hex, #hex) for the rest — and that is what made the
+ * later pages impossible to restyle coherently.
+ */
+
+@theme {
+  --color-bg: light-dark(#eef1f6, #12131a);
+  --color-panel: light-dark(#ffffff, #1b1d27);
+  --color-panel-2: light-dark(#f4f6fa, #22252f);
+  --color-line: light-dark(#d5dbe6, #30343f);
+  --color-ink: light-dark(#191d27, #e7e9ee);
+  --color-dim: light-dark(#5a6474, #969cab);
+  --color-accent: light-dark(#2b5bb5, #8fb8ff);
+  --color-good: light-dark(#16714a, #7fd1a0);
+  --color-warn: light-dark(#8a5710, #e8c07d);
+  --color-bad: light-dark(#a3323c, #e89a9a);
+
+  --font-sans:
+    ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-card: 1rem;
+}
+
+/* Tailwind's `dark:` needs to follow the attribute, not the media query, or a
+   pinned theme and the OS disagree on anything a token cannot express. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@layer base {
+  html {
+    /* iOS zooms a focused input under 16px. Everything else can be smaller. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    /* Room for the bottom tab bar plus the home indicator. */
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* Numbers line up in every table and badge. The old stylesheet did this and
+     it is the cheapest thing that makes a dense table readable. */
+  th,
+  td,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 28%, transparent);
+  }
+}
+
+@layer utilities {
+  /* One place that knows the minimum tap target. The old UI had 19–33px
+     controls, which is the single biggest reason it was unusable on a phone. */
+  .tap {
+    @apply min-h-11 min-w-11;
+  }
+
+  .card {
+    @apply bg-panel border border-line rounded-2xl;
+  }
+
+  /* Sticky first column, so a wide table keeps its row label on screen instead
+     of scrolling the meaning off the left edge. */
+  .sticky-label {
+    @apply sticky left-0 bg-panel z-10;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

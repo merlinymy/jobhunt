@@ -12,6 +12,12 @@ token.json
 CLAUDE.local.md
 .claude/settings.local.json
 
+# frontend: source is committed, build output and deps are not.
+# `make build-web` runs on the host — git pull && make build-web, no restart.
+web/node_modules/
+jobhunt/web/dist/
+*.tsbuildinfo
+
 # rendered output
 out/
 

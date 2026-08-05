@@ -2,7 +2,8 @@ PY := .venv/bin/python
 
 .DEFAULT_GOAL := help
 .PHONY: help venv migrate load-profile dev ingest score tailor inbox chat \
-        install-agents agents-stop doctor backup test
+        install-agents agents-stop doctor backup test \
+        build-web dev-web check-web
 
 help:  ## list targets
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  \033[1m%-14s\033[0m %s\n", $$1, $$2}'
@@ -46,6 +47,15 @@ doctor: $(PY)  ## check the deployment: disk, schema, backups, extras, bind
 
 backup: $(PY)  ## snapshot the DB to the internal disk, verify, prune
 	$(PY) -m jobhunt.backup $(ARGS)
+
+build-web:  ## compile the React app into jobhunt/web/dist
+	cd web && npm ci && npm run build
+
+dev-web:  ## Vite on 5173 proxying /api to 8000 — run alongside `make dev`
+	cd web && npm run dev
+
+check-web:  ## eslint + tsc on the frontend
+	cd web && npm run lint && npm run typecheck
 
 test: $(PY)  ## the table-driven suites (standalone scripts, not pytest)
 	$(PY) tests/test_url_normalization.py
