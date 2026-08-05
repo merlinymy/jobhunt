@@ -1,12 +1,17 @@
 # jobhunt
 
-Personal job-search pipeline. Discovers postings, scores them against my profile, builds a
-tailored resume and answer set for each one, and tracks what happens. Single user, localhost
-only, runs on a Mac mini.
+A job-search pipeline for one person. It discovers postings, scores them against your
+profile, builds a tailored resume and answer set for each one, and tracks what happens. Single
+user, binds to localhost, runs on any Mac or Linux box you leave on.
 
-**I fill out and submit every application by hand.** The system finds the jobs, prepares the
+**You fill out and submit every application by hand.** The system finds the jobs, prepares the
 material, and instruments the outcome. It never touches a form and never auto-submits — see
 [Why no browser automation](docs/architecture.md#why-no-browser-automation).
+
+The objective it is tuned for is *interviews per application submitted*, not applications sent.
+Filters exist to drop roles you would genuinely refuse; the review queue asks
+*would I have applied to this anyway?* on every one, and a falling ratio there is the signal
+that the thing has quietly become a volume machine.
 
 ## Personal data
 
@@ -17,29 +22,21 @@ personal data and is not yours to publish, so none of it belongs in a repository
 
 - `docs/profile.example/` is the committed template. `cp -r docs/profile.example docs/profile`.
 - `JOBHUNT_PROFILE_DIR` moves the real files outside the checkout entirely.
-- It used to sync between machines through git. It now syncs with `make profile-push` and
-  `make profile-pull` over Tailscale.
+- Editing on one machine and running on another? `make profile-push HOST=…` and
+  `make profile-pull HOST=…` rsync it over ssh, since git is no longer carrying it.
 
-This repository's history is clean: `docs/profile/` has never existed in any commit here, and
-the phone number, school and personal email that appeared in a few source comments were replaced
-throughout. It was filtered out of a private predecessor with `git filter-repo` and verified by
-scanning every blob of every commit.
+A `.gitignore` entry only stops *future* commits. If you ever commit a profile by accident,
+it stays in history until `git filter-repo --invert-paths --path docs/profile/` and a
+force-push — and on GitHub, until you also delete forks and ask support to garbage-collect,
+because unreferenced commits stay reachable by SHA for a while.
 
-If you fork this and add your own profile, note that a `.gitignore` entry only stops *future*
-commits. Anything already committed stays in history and needs `git filter-repo --invert-paths
---path docs/profile/` plus a force-push — and on GitHub, deleting forks and asking support to
-garbage-collect, since unreferenced commits stay reachable by SHA for a while.
+## What works
 
-## Status
-
-| Phase | | State |
-| --- | --- | --- |
-| 1 | DB, state machine, dashboard | done |
-| 2 | Profile store, resume tailoring | done |
-| 3 | Answer bank, chat intake | done except the `chat` worker |
-| 4 | Discovery, scoring, review queue | done |
-| 5 | Gmail inbox poller | not started — `make inbox` will fail until it lands |
-| 6 | Interview prep | not started |
+Discovery, scoring, the review queue, resume tailoring, the answer bank and the dashboard are
+all built and in use. Two things are declared in the `Makefile` but not implemented yet, and
+will fail with `ModuleNotFoundError` until they are: `make inbox` (Gmail polling to close
+applications automatically) and `make chat` (interactive gap-filling for questions the answer
+bank has no entry for). Everything else in `make help` runs.
 
 ## Setup
 
@@ -65,7 +62,7 @@ Three things actually need a value; the rest have working defaults.
 
 | Variable | What to put | Why |
 | --- | --- | --- |
-| `JOBHUNT_DB` | An absolute path on a **local** disk | Where everything lives. Never iCloud Drive, Dropbox, or any sync folder — WAL plus file-level sync corrupts SQLite, and `db.connect()` refuses such a path outright. A plain `~/jobhunt/jobhunt.db` is fine; an external SSD is what this repo's owner uses, and that path gets extra mount checks. |
+| `JOBHUNT_DB` | An absolute path on a **local** disk | Where everything lives. Never iCloud Drive, Dropbox, or any sync folder — WAL plus file-level sync corrupts SQLite, and `db.connect()` refuses such a path outright. A plain `~/jobhunt/jobhunt.db` is fine. A path under `/Volumes` gets extra mount checks — see below. |
 | `ANTHROPIC_API_KEY` | A key from [console.anthropic.com](https://console.anthropic.com) | Scoring, tailoring and answer drafting are all model calls. Measured cost is roughly $8–14/month at ~100 applications. Without it, discovery and the dashboard still work; scoring and tailoring do not. |
 | `JOBHUNT_PROFILE_DIR` | Leave blank unless your profile lives outside the repo | Defaults to `docs/profile/`. |
 
@@ -109,9 +106,9 @@ make ingest         # find postings   (needs config/searches.yaml — see below)
 make score          # prefilter, then LLM scoring on what survives
 ```
 
-Discovery reads `config/searches.yaml` for the search terms and the list of company job boards
-to poll. The one in this repo is tuned for its owner's search; edit it before your first
-`make ingest` or you will get someone else's jobs.
+`config/searches.yaml` holds the search terms and the company job boards to poll. **Edit it
+before your first `make ingest`** — the version in this repo is one person's search, so as
+shipped it will find you someone else's jobs.
 
 Then open the dashboard, work `/review`, approve what you would genuinely apply to, and build a
 packet. **You submit every application yourself.** The system never touches a form.
@@ -129,9 +126,11 @@ The running server picks up a new build on the next request; no restart needed.
 
 ### Running it permanently
 
-[`docs/deploy-mini.md`](docs/deploy-mini.md) is the runbook for an always-on host: three launchd
-agents, nightly verified backups, and HTTPS over Tailscale so the review queue works from a
-phone. It is macOS-specific.
+Nothing above needs a server — `make dev` on a laptop is a complete install. If you want it
+running unattended, [`docs/deploy-mini.md`](docs/deploy-mini.md) is a worked example on macOS:
+three launchd agents for discovery, the dashboard and nightly verified backups, the database on
+an external disk, and HTTPS over Tailscale so the review queue works from a phone. Adapt or
+ignore it; the app itself does not care.
 
 ## How it works
 
@@ -145,7 +144,7 @@ of them wrong. The happy path is `discovered → scored → job_approved → pac
 
 | From | To |
 | --- | --- |
-| — | `discovered` (ingest), `applied` (manual entry of one I submitted by hand) |
+| — | `discovered` (ingest), `applied` (manual entry of one already submitted by hand) |
 | `discovered` | `scored`, or `filtered` by the deterministic prefilter |
 | `scored` | `job_approved`, or `skipped` |
 | `job_approved` | `packet_ready`, or `expired` |
@@ -159,7 +158,7 @@ Every state change writes an `events` row in the same transaction. `jobhunt/stat
 only place `applications.state` is written, and it rejects any transition absent from its
 table — including `applied → offer`, since an offer always passes through `interview`.
 
-Score orders the review queue and nothing else. I approve every job.
+Score orders the review queue and nothing else. You approve every job.
 
 Full detail in [`docs/architecture.md`](docs/architecture.md); the schema in
 [`migrations/001_init.sql`](migrations/001_init.sql) is the source of truth.
@@ -170,41 +169,56 @@ A React SPA over a JSON API: Vite, React 19, Tailwind 4, TypeScript, React Route
 Query, served as static files by the same FastAPI process. One process on the host, no Node at
 runtime.
 
-It was server-rendered Jinja + HTMX until 2026-08-05, and the reason it changed was the phone:
-the review queue is worth working from anywhere, and five different data shapes had been forced
-into one `<table>`. Business logic did not move — `views.py` still decides what a page shows,
-`actions.py` what a button does, and the state vocabulary is served from `/api/meta` rather than
-hardcoded in TypeScript.
+Business logic stays in Python: `views.py` decides what a page shows, `actions.py` what a
+button does, and the state vocabulary comes from `/api/meta` rather than being hardcoded in
+TypeScript. It works on a phone — the review queue is the flow worth having in your pocket.
 
-- **Pipeline** — funnel counts, and the applications table with six composing filters (search,
-  state, ATS, source, referral, would-apply-anyway) and eight sortable columns. Filters and
-  sort live in the query string, so any view is a bookmarkable URL that survives a reload.
-- **Log application** — manual entry for anything submitted by hand. Checks the apply URL live
-  against the dedup key and refuses a posting already tracked. Always asks
-  *would I have applied to this anyway?*
-- **Stats** — conversion by ATS, by source, and by referral status, each independently
-  sortable, plus the `would_apply_anyway` ratio. A falling ratio means the system is
-  manufacturing volume, which is the thing this design exists to prevent.
+- **Review** — the curated queue and the only place a job is approved. One card per posting
+  with its score, the job description behind a button, and a referral flag if you know someone
+  there. Duplicate listings of the same role are collapsed to one card, so deciding it decides
+  all of them. Skip is terminal, so it sits behind a three-second undo.
+- **Packet** — everything needed to fill one form: the tailored resume PDF, a diff against
+  your corpus showing exactly what was reworded, and the answer set with a copy button on each.
+- **Pipeline** — funnel counts and the applications table, with six composing filters and eight
+  sortable columns. Filters and sort live in the query string, so any view is a bookmarkable
+  URL that survives a reload.
+- **Fill** — every field an ATS asks for, one per box, with dates rendered in each of the four
+  formats they disagree about. Not autofill; just the retyping removed.
+- **Log application** — manual entry for anything submitted outside the pipeline. Checks the
+  apply URL live against the dedup key and refuses a posting already tracked.
+- **Stats** — conversion by ATS, source and referral status, each independently sortable, plus
+  the `would_apply_anyway` ratio.
 
-Auto / light / dark theme switch in the header, stored in a cookie and applied server-side.
+Auto / light / dark switch in the header, stored in `localStorage` and applied by a blocking
+script before first paint, so a pinned dark theme never flashes white.
 
 ## Layout
 
 ```
 jobhunt/
   config.py      paths, .env reader, the only clock
-  db.py          connections, pragmas, transactions
+  db.py          connections, pragmas, transactions, the volume guard
+  doctor.py      one answer to "is this deployment healthy"
+  backup.py      VACUUM INTO snapshots, verified and pruned
   migrate.py     applies migrations, refuses edited ones
   normalize.py   URL normalization, ATS detection, dedup keys
   states.py      the state machine — every state write goes through here
   queries.py     named parameterized SQL, plus filtering and stats aggregation
-  web/           FastAPI app, Jinja templates, CSS, vendored htmx
-config/models.yaml   which model runs which task, and why
+  ingest.py  prefilter.py  score.py  tailor.py  resume.py  answers.py  llm.py
+  web/
+    app.py       the shell: mounts, error handlers, SPA fallback
+    api.py       the JSON API — routing and serialization only
+    views.py     what a page shows (no framework in it)
+    actions.py   what a button does (no framework in it)
+web/             the React app; builds into jobhunt/web/dist
+config/
+  models.yaml    which model runs which task, and why
+  prompts/       one system prompt per task, edited without a restart
+  searches.yaml  search terms and the boards to poll — edit this
 docs/
   architecture.md    state machine, workers, algorithms, packet design
-  build-plan.md      phases and gates — check boxes off as work completes
   intake.md          the questionnaire that fills docs/profile/
-  profile/           my actual profile data. Source of truth, hand-edited.
+  profile.example/   template for docs/profile/, which is untracked
 migrations/          numbered .sql, applied in order, never edited after running
 ```
 
@@ -226,24 +240,25 @@ These raise at runtime rather than living only in a document:
 - Schema-level: `jobs.apply_url_norm` and `applications.job_id` are UNIQUE, one processed
   email per `email_msg_id`, and natural-key indexes on every table `make load-profile` writes.
 
-## Machines
+## Commands
 
-Three Macs, one host. Only the **Mac mini** runs the app — the repo on its internal disk, the
-database on an external encrypted SSD, three launchd agents (discovery, dashboard, backup),
-and sleep disabled so the scheduled runs fire. The laptops are dev clients: edit code and
-code, and reach the dashboard over Tailscale Serve at
-`https://jobhunt-mini.<tailnet>.ts.net`. Profile data is not in git — `make profile-push`
-moves it over the tailnet instead. `make doctor` says whether the host is healthy.
+`make` on its own lists every target.
 
-## Tests
+| | |
+| --- | --- |
+| `make dev` | dashboard on localhost:8000 |
+| `make dev-web` | Vite on 5173 for frontend work, proxying `/api` to 8000 |
+| `make migrate` | apply `migrations/*.sql` in order; idempotent |
+| `make load-profile` | import `docs/profile/*`; idempotent |
+| `make ingest` | one discovery run — JobSpy plus direct ATS board polls |
+| `make score` | deterministic prefilter, then LLM scoring on the survivors |
+| `make tailor` | build packets for everything in `job_approved` |
+| `make backup` | snapshot the database, verify it, prune old ones |
+| `make doctor` | disk, schema, backups, dependencies, bind address |
+| `make test` | the two table-driven suites |
+| `make check-web` | eslint and tsc |
 
-There is deliberately no test suite. Correctness lives in schema constraints and runtime
-assertions, and everything else is verified by hand against real data. Three exceptions are
-table-driven with real fixtures: URL normalization, ATS detection, and the tailoring validator
-— which must reject an invented employer, a shifted date, or an inflated metric.
-
-```bash
-make test        # the two Python suites (standalone scripts, not pytest)
-make check-web   # eslint + tsc on the frontend
-make doctor      # is this deployment healthy
-```
+There is deliberately no broad test suite — correctness lives in schema constraints and
+runtime assertions that raise. The two exceptions are table-driven against real fixtures: URL
+normalization, and the tailoring validator, which has to reject an invented employer, a shifted
+date, and an inflated metric.
