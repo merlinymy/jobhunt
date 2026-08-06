@@ -1,0 +1,18 @@
+-- What this posting asks for that the corpus cannot support, and the nearest
+-- thing it can.
+--
+-- A JSON array of `gaps.Gap`. Computed once per application before tailoring
+-- and kept, because it depends only on (job description, corpus) — neither of
+-- which changes between a build and its rebuilds. Recomputing it on every
+-- rebuild would bill a model call to answer a question already answered.
+--
+-- The point is not to flag the gap. The scorer already does that in prose, once,
+-- at triage, and then it is gone. The point is `bullet_ids`: the tailor is told
+-- "the posting wants AWS, you have no AWS, and these four rows are the closest
+-- thing you have" so the resume carries the adjacent evidence instead of falling
+-- silent on the whole subject. A reader scanning for AWS who finds nothing about
+-- infrastructure concludes there is none.
+--
+-- NULL means never analysed. An empty array means analysed and nothing was
+-- missing, which is a different and much more useful statement.
+ALTER TABLE applications ADD COLUMN gaps TEXT;
