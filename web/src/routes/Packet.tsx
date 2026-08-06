@@ -1,11 +1,22 @@
-import { AlertTriangle, Download, ExternalLink, Handshake, Wand2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Download,
+  ExternalLink,
+  Handshake,
+  Loader2,
+  ShieldCheck,
+  Wand2,
+} from "lucide-react";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useBuildPacket, useGenerateAnswer, useSetAnswer } from "../api/mutations";
 import { usePacket } from "../api/queries";
-import type { Answer, DiffRow } from "../api/types";
+import type { Answer, DiffRow, Finding, Run } from "../api/types";
 import { CopyButton } from "../components/CopyButton";
+import { Gaps } from "../components/Gaps";
+import { PacketChat } from "../components/PacketChat";
+import { ResumeText } from "../components/ResumeText";
 import { Button, Card, ErrorState, Pill, Spinner, inputClass } from "../components/ui";
 import { label } from "../lib/format";
 import { stateTone } from "../lib/states";
@@ -106,10 +117,15 @@ export default function Packet() {
             )}
             <Button
               variant="primary"
-              /* Disabled while pending is not cosmetic: a second click here is a
-                 second billed model call. hx-disabled-elt used to do this free. */
-              loading={build.isPending}
-              disabled={build.isPending || !data.has_jd}
+              /* Disabled while a build is going is not cosmetic: a second click
+                 is a second pair of billed model calls. The guard has to read
+                 `data.run` and not just `isPending` — the request now returns a
+                 202 after about a tenth of a second, so `isPending` goes false
+                 while the build still has a minute left to run. The database
+                 lock would turn a second click into a 409 rather than a second
+                 bill, but a button that invites the click is still wrong. */
+              loading={build.isPending || !!data.run}
+              disabled={build.isPending || !!data.run || !data.has_jd}
               onClick={() => build.mutate()}
               title={data.has_jd ? undefined : "This posting has no job description"}
             >
@@ -133,6 +149,22 @@ export default function Packet() {
         )}
       </Card>
 
+      <BuildProgress run={data.run} lastRun={data.last_run} labels={data.phase_labels} />
+
+      {!data.run && (
+        <>
+          <Findings findings={data.findings} />
+          {/* Text before chat, deliberately: you read the resume, then argue
+              with it. The line numbers here are the ones the model is shown,
+              so a complaint can name one. */}
+          <ResumeText data={data.resume_text} />
+          <Gaps gaps={data.gaps} analysed={data.gaps_analysed} />
+          {data.resume_text && (
+            <PacketChat id={id} messages={data.messages} disabled={!!data.run} />
+          )}
+        </>
+      )}
+
       <h2 className="mb-2 text-lg font-semibold tracking-tight">
         Answers
         {data.unknowns > 0 && (
@@ -147,6 +179,160 @@ export default function Packet() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** The four steps of a build, in order, so the page can show where it is even
+ *  before the worker has reported the first one. Mirrors `runs.PHASE_LABELS`;
+ *  the labels themselves come from the server so the wording lives in one file. */
+const BUILD_PHASES = ["selecting", "checking", "rendering", "finished"] as const;
+
+/** What the build is doing right now.
+ *
+ *  This exists because the build stopped being a blocking request. Two model
+ *  calls back to back is a long time to look at a spinner that cannot say which
+ *  one it is on — and "checking every claim against your corpus" is the step
+ *  people assume has hung, because nothing about a resume suggests a second
+ *  model is reading it.
+ *
+ *  Also shows a *finished* run when it failed. A build that died while the tab
+ *  was closed otherwise leaves the page looking like it was never clicked. */
+function BuildProgress({
+  run,
+  lastRun,
+  labels,
+}: {
+  run: Run | null;
+  lastRun: Run | null;
+  labels: Record<string, string>;
+}) {
+  if (!run) {
+    if (lastRun && (lastRun.state === "failed" || lastRun.state === "interrupted")) {
+      return (
+        <Card className="mb-4 border-bad/40">
+          <p className="flex items-center gap-2 font-medium text-bad">
+            <AlertTriangle className="size-4 shrink-0" aria-hidden />
+            The last build {lastRun.state === "failed" ? "failed" : "was interrupted"}
+          </p>
+          {lastRun.error && (
+            <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-dim">
+              {lastRun.error}
+            </pre>
+          )}
+        </Card>
+      );
+    }
+    return null;
+  }
+
+  const phase = run.progress?.phase ?? "selecting";
+  const at = BUILD_PHASES.indexOf(phase as (typeof BUILD_PHASES)[number]);
+  return (
+    <Card className="mb-4 border-accent/40">
+      <p className="flex items-center gap-2 font-medium">
+        <Loader2 className="size-4 shrink-0 animate-spin text-accent" aria-hidden />
+        {labels[phase] ?? "Working"}
+      </p>
+      {run.progress?.message && (
+        <p className="mt-1 text-sm text-dim">{run.progress.message}</p>
+      )}
+      <ol className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        {BUILD_PHASES.slice(0, 3).map((p, i) => (
+          <li
+            key={p}
+            className={
+              // Done, current, not yet. Three states rather than a bar, because
+              // neither model call has a denominator to fill one with.
+              at > i ? "text-good" : at === i ? "text-ink" : "text-dim/60"
+            }
+          >
+            {at > i ? "✓ " : at === i ? "› " : "· "}
+            {labels[p] ?? p}
+          </li>
+        ))}
+      </ol>
+      {run.task === "packet" && run.progress?.total ? (
+        <p className="mt-2 text-sm text-dim">
+          Building {run.progress.done} of {run.progress.total} — this is the queued
+          batch, not just this one.
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
+/** Labels for what a check objected to. Kept short: the message says the rest,
+ *  and the badge is there to make a list of five scannable in one pass. */
+const FINDING_LABEL: Record<Finding["kind"], string> = {
+  number: "number",
+  identifier: "identifier",
+  homoglyph: "lookalike letter",
+  unknown: "not in corpus",
+  duplicate: "duplicate",
+  review: "unsupported claim",
+  unchecked: "not checked",
+};
+
+/** What the checks objected to, beside the resume rather than instead of it.
+ *
+ *  Three states, and conflating any two of them loses the point:
+ *    null  — never built. Say nothing; there is no resume to have opinions about.
+ *    []    — built and every check passed. Worth stating positively, because it
+ *            is the only thing that distinguishes a clean resume from an
+ *            unchecked one, and those now look identical in the PDF.
+ *    [...] — flagged. Never hidden behind a disclosure: the whole reason these
+ *            stopped blocking is that a human reads them, and a warning folded
+ *            into a collapsed panel is a warning nobody reads.
+ */
+function Findings({ findings }: { findings: Finding[] | null }) {
+  if (findings === null) return null;
+
+  if (findings.length === 0) {
+    return (
+      <Card className="mb-4 border-good/30">
+        <p className="flex items-center gap-2 text-sm text-good">
+          <ShieldCheck className="size-4 shrink-0" aria-hidden />
+          Every line traces back to the corpus.
+        </p>
+      </Card>
+    );
+  }
+
+  const dropped = findings.filter((f) => f.blocking).length;
+  return (
+    <Card className="mb-4 border-warn/40">
+      <p className="flex items-center gap-2 font-medium text-warn">
+        <AlertTriangle className="size-4 shrink-0" aria-hidden />
+        {findings.length} thing{findings.length === 1 ? "" : "s"} to look at before you
+        send this
+      </p>
+      <p className="mt-1 text-sm text-dim">
+        The packet was built anyway — you read it before it goes out, so these are
+        notes, not a refusal.
+        {dropped > 0 &&
+          ` ${dropped} line${dropped === 1 ? " was" : "s were"} dropped and ${
+            dropped === 1 ? "is" : "are"
+          } not in the PDF.`}
+      </p>
+      <ul className="mt-3 space-y-3">
+        {findings.map((f, i) => (
+          <li key={i} className="border-t border-line pt-3 first:border-0 first:pt-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <Pill tone={f.blocking ? "text-bad" : "text-warn"}>
+                {FINDING_LABEL[f.kind] ?? f.kind}
+              </Pill>
+              <span className="text-sm text-dim">{f.where}</span>
+            </div>
+            <p className="mt-1 text-[15px]">{f.message}</p>
+            {f.source && (
+              <p className="mt-1 text-sm text-dim">
+                <span className="text-ink">Corpus says:</span> {f.source}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 

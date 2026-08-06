@@ -2,7 +2,8 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { api, qs } from "./client";
 import { k, type Params } from "./keys";
 import type {
-  Detail, Fill, Meta, Packet, Pipeline, ReviewBatch, Runs, Stats, UrlCheck, Contact,
+  Contact, Detail, Fill, JobDescription, Meta, Packet, Pipeline, PromptDetail,
+  PromptSummary, ReviewBatch, Runs, Stats, UrlCheck,
 } from "./types";
 
 /** Constants and profile data. Neither changes without a deploy or a
@@ -36,7 +37,16 @@ export function useReview(limit: number) {
 }
 
 export function usePacket(id: number) {
-  return useQuery({ queryKey: k.packet(id), queryFn: () => api.get<Packet>(`/packet/${id}`) });
+  return useQuery({
+    queryKey: k.packet(id),
+    queryFn: () => api.get<Packet>(`/packet/${id}`),
+    // A build is two model calls and answers 202, so the packet does not exist
+    // yet when the click resolves. Poll while one is running and stop the moment
+    // it is not — same rule as useRuns, but 2s rather than 3s because this page
+    // is being watched rather than glanced at.
+    refetchInterval: (query) => (query.state.data?.run ? 2000 : false),
+    staleTime: 0,
+  });
 }
 
 export function useStats(params: Params) {
@@ -74,6 +84,37 @@ export function useRuns() {
     queryFn: () => api.get<Runs>("/runs"),
     refetchInterval: (query) => (query.state.data?.active ? 3000 : false),
     staleTime: 0,
+  });
+}
+
+/** The editable system prompts. Not STATIC — the whole point is that they
+ *  change while you are looking at them. */
+export function usePrompts() {
+  return useQuery({
+    queryKey: k.prompts(),
+    queryFn: () => api.get<{ prompts: PromptSummary[] }>("/prompts"),
+  });
+}
+
+export function usePrompt(task: string | null) {
+  return useQuery({
+    queryKey: k.prompt(task ?? ""),
+    queryFn: () => api.get<PromptDetail>(`/prompts/${task}`),
+    enabled: !!task,
+  });
+}
+
+/** The full job description behind a review card.
+ *
+ *  Fetched when the card is opened rather than shipped with the batch: eight
+ *  complete descriptions is most of a megabyte on a phone and seven of them go
+ *  unread. Cached forever — a posting's text does not change under us. */
+export function useJobDescription(applicationId: number | null) {
+  return useQuery({
+    queryKey: k.description(applicationId ?? 0),
+    queryFn: () => api.get<JobDescription>(`/review/${applicationId}/description`),
+    enabled: applicationId !== null,
+    staleTime: Infinity,
   });
 }
 

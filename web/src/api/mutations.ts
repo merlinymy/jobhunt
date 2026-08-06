@@ -3,7 +3,8 @@ import { toast } from "sonner";
 import { ApiError, api } from "./client";
 import { k } from "./keys";
 import type {
-  Decision, Detail, Packet, ReviewBatch, Run, RunPipeline, Runs, TailorResult,
+  ChatMessage, Decision, Detail, Packet, PromptDetail, ReviewBatch, Run, RunPipeline,
+  Runs, TailorResult,
 } from "./types";
 
 /** Everything a decision can move.
@@ -114,6 +115,40 @@ export function useBuildPacket(id: number) {
   });
 }
 
+/** One conversational turn about the resume.
+ *
+ *  Synchronous, unlike a build: one model call and no render, so the reply comes
+ *  back with the response. The whole packet is refetched rather than just the
+ *  thread — a turn can be answered from a resume that was revised in another
+ *  tab, and the findings shown beside it have to agree with it. */
+export function useSendChat(id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (message: string) =>
+      api.post<{ messages: ChatMessage[] }>(`/packet/${id}/chat`, { message }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: k.packet(id) });
+    },
+    /* Inline, not a toast: a rejected message is one you have to retype, and a
+       notice that disappears in eight seconds is the wrong place to say so. */
+    meta: { silent: true },
+  });
+}
+
+/** Put a proposed revision on the row. Renders, so it takes a few seconds. */
+export function useApplyProposal(id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (messageId: number) =>
+      api.post<Packet>(`/packet/${id}/chat/${messageId}/apply`),
+    onSuccess: (data) => {
+      qc.setQueryData(k.packet(id), data);
+      void qc.invalidateQueries({ queryKey: k.application(id) });
+      invalidatePipeline(qc);
+    },
+  });
+}
+
 export function useGenerateAnswer(id: number) {
   const qc = useQueryClient();
   return useMutation({
@@ -182,6 +217,45 @@ export function useStartRun() {
     },
     onSettled: () => void qc.invalidateQueries({ queryKey: k.runs() }),
   });
+}
+
+/** Prompt edits.
+ *
+ *  All three write the same detail payload back into the cache and invalidate
+ *  the index, whose per-task dot shows whether a task is on the file or on an
+ *  override. Inline errors: "that is 12 characters" is a message to act on, not
+ *  one to watch disappear in eight seconds. */
+function usePromptMutation<T>(task: string, fn: (input: T) => Promise<PromptDetail>) {
+  const qc = useQueryClient();
+  return useMutation({
+    ...INLINE,
+    mutationFn: fn,
+    onSuccess: (data) => {
+      qc.setQueryData(k.prompt(task), data);
+      void qc.invalidateQueries({ queryKey: k.prompts() });
+    },
+  });
+}
+
+export function useSavePrompt(task: string) {
+  return usePromptMutation(task, (body: { body: string; note: string }) =>
+    api.put<PromptDetail>(`/prompts/${task}`, body),
+  );
+}
+
+export function useRevertPrompt(task: string) {
+  // `void` rather than no parameter at all: TanStack derives the mutate()
+  // signature from this, and a zero-arg function makes mutate() require an
+  // argument it has no use for.
+  return usePromptMutation<void>(task, () =>
+    api.post<PromptDetail>(`/prompts/${task}/revert`),
+  );
+}
+
+export function useActivatePrompt(task: string) {
+  return usePromptMutation(task, (sha: string) =>
+    api.post<PromptDetail>(`/prompts/${task}/activate/${sha}`),
+  );
 }
 
 export function useTailor() {
