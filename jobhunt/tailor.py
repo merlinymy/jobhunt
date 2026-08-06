@@ -212,12 +212,64 @@ class TailorResult:
 # ================================== prompting ==================================
 
 
+def stories_block(conn: sqlite3.Connection) -> str:
+    """Behavioural stories, for prompts that answer essay questions.
+
+    Never sent to `tailor` itself, and the flag on `build_prompt` defaults off
+    for that reason. A resume line must come from exactly one `bullets` row and
+    is validated against that row's id; a story has no id, so a line drawn from
+    one would be rejected as an unknown bullet — after a paid call, and with the
+    model having been invited to make the mistake. It is also what keeps the
+    cached corpus prefix byte-identical between a build and the chat that
+    replays it.
+
+    Empty when nothing is loaded, which is the normal state until stories.md is
+    filled in. Unfinished ones never reach here — `load_profile` refuses them.
+    """
+    rows = queries.corpus_stories(conn)
+    if not rows:
+        return ""
+    out = [
+        "STORIES",
+        "",
+        "Situation/action/result accounts of things that happened, for essay and",
+        "behavioural questions. These are NOT resume material: they have no bullet id",
+        "and must never be selected as a resume line. Everything in them is true and",
+        "may be drawn on when a question asks what happened rather than what was built.",
+        "",
+    ]
+    for row in rows:
+        tags = ""
+        if row["tags"]:
+            try:
+                tags = "  [" + ", ".join(json.loads(row["tags"])) + "]"
+            except json.JSONDecodeError:
+                tags = ""
+        out.append(f"## {row['title']}{tags}")
+        for label in ("situation", "action", "result"):
+            out.append(f"{label.title()}: {_uncited(row[label])}")
+        out.append("")
+    return "\n".join(out).rstrip()
+
+
+# `[48]`, `[97]` — bullet-id citations a drafted story carries so its facts can
+# be checked against the corpus row they came from. Useful in the file, noise in
+# the prompt, and actively bad if one were ever copied through into an answer
+# someone pastes into an application form.
+_CITATION = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
+
+
+def _uncited(text: str | None) -> str:
+    return _CITATION.sub("", str(text or "")).strip()
+
+
 def build_prompt(
     conn: sqlite3.Connection,
     jd_text: str,
     *,
     limit: int | None = None,
     gap_block: str = "",
+    include_stories: bool = False,
 ) -> tuple[str, str]:
     """Return `(corpus_block, prompt)`.
 
@@ -254,6 +306,12 @@ def build_prompt(
         lines.append(f"[{row['id']}] ({where}) [{'; '.join(flags)}]")
         lines.append(f"    {row['text']}")
     corpus = "\n".join(lines)
+    if include_stories:
+        # Appended to the cached block, not the per-call prompt: stories change
+        # about as often as the corpus does, which is to say almost never.
+        told = stories_block(conn)
+        if told:
+            corpus = f"{corpus}\n\n{told}"
 
     ask = (
         "JOB DESCRIPTION\n\n"
