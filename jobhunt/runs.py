@@ -30,7 +30,7 @@ from typing import Any, Protocol
 
 from . import config, db
 
-TASKS = ("ingest", "score")
+TASKS = ("ingest", "score", "packet")
 
 # What the dashboard button can ask for. `ingest_score` is the one that is
 # actually useful: ingest alone leaves rows in `discovered`, which never reach
@@ -39,6 +39,10 @@ PIPELINES: dict[str, tuple[str, ...]] = {
     "ingest": ("ingest",),
     "score": ("score",),
     "ingest_score": ("ingest", "score"),
+    # Not part of the discovery chain. A packet build answers a decision I just
+    # made, and pairing it with scoring would mean approving a job during a
+    # batch had to wait out the batch.
+    "packet": ("packet",),
 }
 
 # How long a `running` row may go without reporting before anyone may take its
@@ -65,6 +69,15 @@ PHASE_LABELS = {
     "waiting": "Waiting on the scoring batch",
     "applying": "Recording scores",
     "scoring": "Scoring",
+    "tailoring": "Writing resumes",
+    # A single packet build is two model calls and a render, and nearly all of
+    # the wall clock is in the two calls. Naming them separately is the whole
+    # point: "still going" and "on the second of two model calls" are different
+    # amounts of information when you are deciding whether to wait.
+    "gaps": "Checking what the posting wants that you lack",
+    "selecting": "Choosing which work to show",
+    "checking": "Checking every claim against your corpus",
+    "rendering": "Rendering the PDF",
     "finished": "Finishing up",
 }
 
@@ -74,7 +87,7 @@ MAX_ERROR_CHARS = 4000
 
 HOST = socket.gethostname()
 
-_ARTICLE = {"ingest": "An", "score": "A"}
+_ARTICLE = {"ingest": "An", "score": "A", "packet": "A"}
 
 
 class AlreadyRunning(RuntimeError):

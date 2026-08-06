@@ -23,7 +23,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from .. import answers, config, db, queries, runs
+from .. import (
+    answers, chat, config, db, gaps, llm, prompts, queries, resume, runs, tailor,
+)
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 from . import actions, runner, views
 
@@ -94,6 +96,11 @@ class TailorRequest(BaseModel):
     limit: int | None = None
 
 
+class PromptRequest(BaseModel):
+    body: str
+    note: str = ""
+
+
 class RunRequest(BaseModel):
     # The pair, because ingest alone leaves rows in `discovered` and those never
     # reach the review queue. `runner.start` rejects anything not in PIPELINES.
@@ -107,6 +114,49 @@ class RunRequest(BaseModel):
 def meta() -> dict[str, Any]:
     """State vocabulary and column definitions, so the client hardcodes none of it."""
     return views.meta()
+
+
+# ------------------------------------------------------------------ prompts ---
+
+
+@router.get("/prompts")
+def list_prompts(conn: Conn) -> dict[str, Any]:
+    return prompts.overview(conn)
+
+
+@router.get("/prompts/{task}")
+def get_prompt(conn: Conn, task: str) -> dict[str, Any]:
+    try:
+        return prompts.view(conn, task)
+    except prompts.PromptError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.put("/prompts/{task}")
+def put_prompt(conn: Conn, task: str, payload: PromptRequest) -> dict[str, Any]:
+    """Save a revision and make it live. Takes effect on the next call — no
+    restart, because `llm.system_prompt` reads it fresh every time."""
+    try:
+        return prompts.save(conn, task, payload.body, payload.note)
+    except prompts.PromptError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/prompts/{task}/activate/{sha}")
+def activate_prompt(conn: Conn, task: str, sha: str) -> dict[str, Any]:
+    try:
+        return prompts.activate(conn, task, sha)
+    except prompts.PromptError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/prompts/{task}/revert")
+def revert_prompt(conn: Conn, task: str) -> dict[str, Any]:
+    """Lift the override. The file is the git-tracked default and the way back."""
+    try:
+        return prompts.revert(conn, task)
+    except prompts.PromptError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 # --------------------------------------------------------------------- runs ---
@@ -255,6 +305,21 @@ def review(
     return {"batch": batch, "waiting": waiting, "limit": limit}
 
 
+@router.get("/review/{application_id}/description")
+def review_description(conn: Conn, application_id: int) -> dict[str, Any]:
+    """The whole job description. The batch carries an excerpt; this is the
+    full text, fetched only for the card actually opened."""
+    row = _found(queries.job_description(conn, application_id))
+    return {
+        "title": row["title"],
+        "company": row["company"],
+        "apply_url": row["apply_url"],
+        # Empty rather than null: plenty of board rows genuinely have no
+        # description, and the client renders that as a sentence, not a crash.
+        "jd_text": row["jd_text"] or "",
+    }
+
+
 def _decide(conn: sqlite3.Connection, application_id: int, to_state: str) -> dict[str, Any]:
     try:
         decision = actions.decide(conn, application_id, to_state)
@@ -272,9 +337,27 @@ def _decide(conn: sqlite3.Connection, application_id: int, to_state: str) -> dic
 
 @router.post("/review/{application_id}/approve")
 def review_approve(conn: Conn, application_id: int) -> dict[str, Any]:
+    """Approve, and start the packet it was approved for.
+
+    Approving used to end here, five clicks short of the thing being approved
+    for. It now kicks off a packet build, which is a separate concern in every
+    respect that matters: it happens after the decision is committed, it cannot
+    unmake it, and a failure to start is reported as a field rather than an
+    error. `job_approved` is the queue, so a build already running picks this
+    row up on its next pass and a second one is neither needed nor possible.
+    """
     from .. import states
 
-    return _decide(conn, application_id, states.JOB_APPROVED)
+    decision = _decide(conn, application_id, states.JOB_APPROVED)
+    try:
+        runner.start(conn, "packet")
+        decision["packet"] = "started"
+    except runs.AlreadyRunning:
+        # A build is going. It re-queries `job_approved`, so this row is in it.
+        decision["packet"] = "queued"
+    except runner.NotReady as exc:
+        decision["packet"] = f"not started — {exc}"
+    return decision
 
 
 @router.post("/review/{application_id}/skip")
@@ -298,10 +381,23 @@ def _packet_payload(
     # Record the gaps on every view, not only on build: the count is what says a
     # question belongs in facts.yaml, and the packet is seen more often than built.
     answers.flag_unknowns(conn, resolved["answers"], application_id)
+    # The live packet run, if there is one. The lock is global to the task, so
+    # this may be the `job_approved` batch rather than this row — which is still
+    # the honest answer to "why is the button refusing", and the phase says which.
     return {
         **packet,
         "answers": views.answers_json(resolved["answers"]),
         "unknowns": resolved["unknowns"],
+        "run": runs.as_dict(runs.active(conn, "packet")),
+        "last_run": runs.as_dict(runs.latest(conn, "packet")),
+        "phase_labels": runs.PHASE_LABELS,
+        # The resume as readable text. The PDF is the artifact that gets
+        # submitted; this is the one you can actually read on a phone and quote
+        # from into the chat box, numbered the same way the model sees it.
+        "resume_text": chat.resume_text(conn, application_id),
+        "gaps": [g.as_dict() for g in (gaps.stored(conn, application_id) or [])],
+        "gaps_analysed": gaps.stored(conn, application_id) is not None,
+        "messages": chat.messages(conn, application_id),
         "error": error,
     }
 
@@ -311,14 +407,82 @@ def packet(conn: Conn, application_id: int) -> dict[str, Any]:
     return _packet_payload(conn, application_id)
 
 
-@router.post("/packet/{application_id}/build")
+@router.post("/packet/{application_id}/build", status_code=202)
 def packet_build(conn: Conn, application_id: int) -> dict[str, Any]:
-    """Tailor, render, store, advance. One model call, so it blocks."""
+    """Start the build and return immediately; the page watches `run`.
+
+    This used to block for the whole build. It is two model calls — choosing the
+    lines, then reading them back against their sources — and a request held open
+    that long can report nothing about which of them it is on. Now the lock is
+    claimed synchronously, so a double-click is still one build and one bill, and
+    a thread does the work.
+    """
+    if queries.get_application(conn, application_id) is None:
+        raise HTTPException(404, "no such application")
+    error: str | None = None
     try:
-        error = actions.build_packet(conn, application_id)
+        runner.start_packet(conn, application_id)
+    except runs.AlreadyRunning as exc:
+        # Not an error state on the row — something is already building, which
+        # the returned `run` describes. Say so rather than implying this failed.
+        error = str(exc)
+    except runner.NotReady as exc:
+        error = str(exc)
+    return _packet_payload(conn, application_id, error)
+
+
+class ChatMessage(BaseModel):
+    message: str
+
+
+@router.get("/packet/{application_id}/chat")
+def packet_chat(conn: Conn, application_id: int) -> dict[str, Any]:
+    return {"messages": chat.messages(conn, application_id)}
+
+
+@router.post("/packet/{application_id}/chat")
+def packet_chat_send(
+    conn: Conn, application_id: int, payload: ChatMessage
+) -> dict[str, Any]:
+    """One turn. Synchronous, unlike a build.
+
+    A build is two model calls and a typeset; this is one call and no render, so
+    it comes back inside a request. Holding the connection is also what lets the
+    reply arrive with the turn instead of the page having to poll for it.
+    """
+    if queries.get_application(conn, application_id) is None:
+        raise HTTPException(404, "no such application")
+    try:
+        reply = chat.send(conn, application_id, payload.message)
+    except chat.ChatError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except llm.LLMError as exc:
+        raise HTTPException(502, f"the model call failed: {exc}") from exc
+    return {"messages": chat.messages(conn, application_id), "reply": reply}
+
+
+@router.post("/packet/{application_id}/chat/{message_id}/apply")
+def packet_chat_apply(
+    conn: Conn, application_id: int, message_id: int
+) -> dict[str, Any]:
+    """Put a proposed revision on the row. Renders, so it takes a few seconds.
+
+    Not started as a background run like a build: there is no second model call
+    here unless the checker runs, and the page has nothing useful to show for
+    the wait beyond the spinner already on the button.
+    """
+    try:
+        chat.apply(conn, application_id, message_id)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return _packet_payload(conn, application_id, error)
+    except chat.ChatError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (tailor.TailorError, llm.LLMError, resume.ResumeError) as exc:
+        raise HTTPException(422, f"{type(exc).__name__}: {exc}") from exc
+    return {
+        **_packet_payload(conn, application_id),
+        "messages": chat.messages(conn, application_id),
+    }
 
 
 @router.post("/packet/{application_id}/answers/{key}/generate")

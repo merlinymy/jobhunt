@@ -27,7 +27,7 @@ import sqlite3
 import threading
 from typing import Any
 
-from .. import db, ingest, prefilter, runs, score
+from .. import db, ingest, prefilter, runs, score, tailor
 
 # The logger both `make dev` and the launchd agent are configured to show. A
 # `jobhunt.*` logger is silently dropped under dev — see the note in app.py.
@@ -45,6 +45,7 @@ def _preflight(tasks: tuple[str, ...]) -> None:
             ingest.load_config()
         if "score" in tasks:
             prefilter.load()
+        if {"score", "packet"} & set(tasks):
             if not (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
                 raise NotReady("ANTHROPIC_API_KEY is not set — see .env.")
     except (ingest.IngestError, prefilter.PrefilterError) as exc:
@@ -73,6 +74,50 @@ def start(conn: sqlite3.Connection, pipeline: str) -> dict[str, Any]:
         target=_work, args=(tasks, run_id), name=f"jobhunt-{pipeline}", daemon=True
     ).start()
     return runs.as_dict(runs.get(conn, run_id)) or {}
+
+
+def start_packet(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]:
+    """Build one packet in the background, so the page can watch it.
+
+    Separate from `start` because that runs a *pipeline* over everything in a
+    state, and this answers a click on one application. It takes the same
+    `packet` lock, which is what stops this and `build_pending` rendering the
+    same row twice — and what makes a double-click a 409 rather than two builds
+    and two bills.
+
+    Held open rather than run inline for one reason: a build is two model calls,
+    and a request that lasts that long cannot report what it is doing. The 202
+    goes back immediately and the page reads `runs` for the phase.
+    """
+    _preflight(("packet",))
+    run_id = runs.claim(conn, "packet", chain=("packet",), trigger="dashboard")
+    threading.Thread(
+        target=_work_one,
+        args=(application_id, run_id),
+        name=f"jobhunt-packet-{application_id}",
+        daemon=True,
+    ).start()
+    return runs.as_dict(runs.get(conn, run_id)) or {}
+
+
+def _work_one(application_id: int, run_id: int) -> None:
+    """One packet, on its own connection. See `_work` for why."""
+    try:
+        conn = db.connect()
+    except Exception as exc:  # noqa: BLE001 - the disk can be gone by now
+        log.error("jobhunt: could not open the database for packet: %s", exc)
+        return
+    try:
+        with runs.attached(conn, run_id) as report:
+            tailor.build_packet(conn, application_id, on_progress=report)
+    except Exception as exc:  # noqa: BLE001 - a thread that raises dies silently
+        # `runs.attached` has already recorded this on the row, which is where
+        # the page reads it from. This line is for the log.
+        log.warning(
+            "jobhunt: packet %s failed — %s: %s", application_id, type(exc).__name__, exc
+        )
+    finally:
+        conn.close()
 
 
 def _work(tasks: tuple[str, ...], first_run_id: int) -> None:
@@ -114,8 +159,10 @@ def _step(conn: sqlite3.Connection, task: str, run_id: int) -> bool:
         with runs.attached(conn, run_id) as report:
             if task == "ingest":
                 ingest.run(conn, on_progress=report)
-            else:
+            elif task == "score":
                 score.run(conn, on_progress=report)
+            else:
+                tailor.build_pending(conn, on_progress=report)
     except Exception as exc:  # noqa: BLE001 - a thread that raises dies silently
         log.warning("jobhunt: %s failed — %s: %s", task, type(exc).__name__, exc)
         return False
