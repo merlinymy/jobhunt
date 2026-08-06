@@ -14,6 +14,13 @@ jh_log_setup discover
 
 cd "$JH_REPO" || { echo "$(jh_stamp) repo missing: $JH_REPO"; exit 1; }
 
+# Both workers take a lock in `runs` so this and the dashboard button cannot run
+# a second Indeed scrape or a second scoring batch at the same time. This is what
+# puts "launchd" rather than "cli" in the sentence the blocked one is shown —
+# "already running (launchd, started 06:30)" is actionable; "(cli)" would be a
+# lie that sends you looking for a terminal you never opened.
+export JOBHUNT_TRIGGER=launchd
+
 echo "===== $(jh_stamp) discovery run starting ====="
 
 # A missed run is a bad morning. A run against a decoy database is a corrupted
@@ -28,6 +35,10 @@ fi
 # Ingest is the one that can be refused by Indeed. It exits 0 even when the
 # scrape aborts early — the board poll is a separate source and still ran — so
 # score follows regardless, and the reason is in the log above it.
+#
+# Exit 3 from either one means the dashboard already had it running. Not a
+# failure, and deliberately not fatal here: if the button was mid-ingest at
+# 06:30, scoring should still get its turn.
 echo "--- $(jh_stamp) ingest"
 "$JH_PY" -m jobhunt.ingest
 ingest_status=$?

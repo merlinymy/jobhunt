@@ -12,5 +12,9 @@ export const k = {
   stats: (p: Params) => ["stats", p] as const,
   fill: () => ["fill"] as const,
   contacts: () => ["contacts"] as const,
+  runs: () => ["runs"] as const,
+  prompts: () => ["prompts"] as const,
+  prompt: (task: string) => ["prompt", task] as const,
+  description: (id: number) => ["description", id] as const,
   urlCheck: (url: string) => ["urlCheck", url] as const,
 };

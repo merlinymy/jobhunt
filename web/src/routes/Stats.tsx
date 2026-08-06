@@ -34,8 +34,13 @@ export default function Stats() {
              hint={`${data.honesty.yes} of ${data.honesty.answered} answered`} />
         <Big label="Response rate" value={pct(data.overall.response_rate)}
              hint={`${data.overall.responded} replied`} />
-        <Big label="LLM spend" value={`$${data.spend.total.toFixed(2)}`}
-             hint={`${data.spend.by_task.reduce((n, t) => n + t.calls, 0)} calls`} />
+        {/* Cache hit rate rides along in the hint: CLAUDE.md ranks prompt
+            caching the first cost lever, and a task whose calls never land
+            inside the TTL pays 125% for an entry it never reads — which is
+            invisible from the cost alone. */}
+        <Big label="LLM spend" value={`$${(data.spend.cost ?? 0).toFixed(2)}`}
+             hint={`${data.spend.calls} calls in ${data.spend.days}d`
+                   + (data.spend.hit_rate === null ? "" : ` · ${pct(data.spend.hit_rate)} cached`)} />
       </div>
 
       {Object.entries(data.tables).map(([prefix, table]) => (

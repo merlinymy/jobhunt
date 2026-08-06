@@ -29,11 +29,13 @@ import re
 import sqlite3
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from . import config, llm, prefilter, states
+from . import config, llm, prefilter, runs, states
 from .db import connect, transaction
+from .runs import ProgressFn
 
 # The scorer reads enough to judge fit, not the whole posting. Past roughly this
 # much, a JD is benefits, EEO boilerplate, and legal text — which costs tokens
@@ -164,6 +166,43 @@ def parse_score(raw: str) -> tuple[float, str]:
     return score, str(payload.get("reason", "")).strip()[:500]
 
 
+# What each internal counter is called on the dashboard, in the order it is
+# rendered. Anything not listed is dropped — the per-rule prefilter breakdown is
+# worth reading in a terminal and is noise in a status line on a phone.
+_TALLY_LABELS = {
+    "prefilter_examined": "examined",
+    "examined": "examined",
+    "prefilter_filtered": "filtered",
+    "filtered": "filtered",
+    "submitted": "submitted",
+    "returned": "returned",
+    "scored": "scored",
+    "failed": "failed",
+    "already": "already scored",
+}
+
+
+def tally(counts: Mapping[str, int]) -> dict[str, int]:
+    """Counters for the dashboard, out of the fuller dict the CLI prints.
+
+    `scored` survives at zero because it is the number being waited on; the rest
+    appear only once they have happened. A row of permanent zeroes is how a
+    number stops being read at all.
+    """
+    out: dict[str, int] = {}
+    for key, label in _TALLY_LABELS.items():
+        if key not in counts or label in out:
+            continue
+        if counts[key] or label == "scored":
+            out[label] = counts[key]
+    return out
+
+
+def _summary(counts: Mapping[str, int]) -> str:
+    """The one line a finished run is remembered by."""
+    return " · ".join(f"{value} {label}" for label, value in tally(counts).items()) or "nothing to do"
+
+
 def pending(conn: sqlite3.Connection, limit: int | None = None) -> list[sqlite3.Row]:
     """Everything the prefilter left in `discovered`, oldest first."""
     sql = """
@@ -200,9 +239,20 @@ def apply_score(conn: sqlite3.Connection, result: Scored) -> None:
 
 
 def score_batch(
-    conn: sqlite3.Connection, rows: list[sqlite3.Row], *, wait: bool = True
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    *,
+    wait: bool = True,
+    on_progress: ProgressFn | None = None,
 ) -> dict[str, int]:
     """Submit one Batch API job for `rows`, then poll and apply the results."""
+    report: ProgressFn = on_progress or (lambda **_: None)
+    report(
+        phase="submitting",
+        message=f"Preparing {len(rows)} postings",
+        done=0,
+        total=len(rows),
+    )
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover - depends on the install extra
@@ -218,7 +268,7 @@ def score_batch(
 
     # Read once for the whole batch rather than per request: a mid-submission
     # edit would otherwise split one batch across two prompt revisions.
-    instructions = llm.system_prompt("score")
+    instructions = llm.system_prompt("score", conn)
     system: list[dict[str, Any]] = [{"type": "text", "text": prefix}]
     if settings.get("cache_profile"):
         # Byte-identical across every request in the batch and across every run
@@ -253,11 +303,36 @@ def score_batch(
     if not wait:
         print(f"  --no-wait: rerun with --batch-id {batch.id} to apply the results.",
               file=sys.stderr)
+        report(
+            phase="submitted",
+            message=f"Submitted {batch.id}, not waiting for it",
+            done=len(requests),
+            total=len(requests),
+            counts={"submitted": len(requests)},
+        )
         return {"submitted": len(requests), "scored": 0, "failed": 0}
 
     deadline = time.monotonic() + BATCH_MAX_WAIT
     while True:
         batch = client.messages.batches.retrieve(batch.id)
+        # The batch reports its own per-request tallies, so this phase gets a
+        # real denominator instead of a spinner and a shrug. Reported on every
+        # poll, which is also what keeps the run's heartbeat alive across a wait
+        # that is allowed to last forty-five minutes.
+        seen = getattr(batch, "request_counts", None)
+        finished = (
+            (getattr(seen, "succeeded", 0) or 0)
+            + (getattr(seen, "errored", 0) or 0)
+            + (getattr(seen, "canceled", 0) or 0)
+            + (getattr(seen, "expired", 0) or 0)
+        ) if seen else 0
+        report(
+            phase="waiting",
+            message=f"Waiting on batch {batch.id}",
+            done=finished,
+            total=len(requests),
+            counts={"submitted": len(requests), "returned": finished},
+        )
         if batch.processing_status == "ended":
             break
         if time.monotonic() > deadline:
@@ -272,7 +347,8 @@ def score_batch(
         time.sleep(BATCH_POLL_SECONDS)
 
     return apply_batch(conn, batch.id, model=model, prompts=prompts,
-                       submitted=len(requests), system_sha=llm.prompt_sha(instructions))
+                       submitted=len(requests), system_sha=llm.prompt_sha(instructions),
+                       on_progress=report)
 
 
 def apply_batch(
@@ -283,6 +359,7 @@ def apply_batch(
     prompts: dict[str, str] | None = None,
     submitted: int | None = None,
     system_sha: str | None = None,
+    on_progress: ProgressFn | None = None,
 ) -> dict[str, int]:
     """Apply the results of an already-submitted batch.
 
@@ -301,9 +378,19 @@ def apply_batch(
     client = anthropic.Anthropic()
     prompts = prompts or {}
     model = model or llm.task_config("score")["model"]
+    report: ProgressFn = on_progress or (lambda **_: None)
+    report(
+        phase="applying",
+        message=f"Reading results from {batch_id}",
+        done=0,
+        total=submitted,
+    )
 
     counts = {"submitted": submitted or 0, "scored": 0, "failed": 0, "already": 0}
-    for entry in client.messages.batches.results(batch_id):
+    for index, entry in enumerate(client.messages.batches.results(batch_id)):
+        # Outside the per-row transactions in `apply_score`, which is where a
+        # progress write has to stay: it has nothing to be atomic with.
+        report(done=index, counts=tally(counts))
         application_id = int(str(entry.custom_id).removeprefix("app-"))
         if entry.result.type != "succeeded":
             counts["failed"] += 1
@@ -404,23 +491,45 @@ def run(
     use_batch: bool = True,
     wait: bool = True,
     run_prefilter: bool = True,
+    on_progress: ProgressFn | None = None,
 ) -> dict[str, int]:
     """Prefilter, then score whatever survived."""
+    report: ProgressFn = on_progress or (lambda **_: None)
     counts: dict[str, int] = {}
     if run_prefilter:
-        counts.update({f"prefilter_{k}": v for k, v in prefilter.run(conn).items()})
+        report(phase="prefilter", message="Applying the deterministic rules", done=0)
+        counts.update(
+            {f"prefilter_{k}": v for k, v in prefilter.run(conn, on_progress=report).items()}
+        )
 
     rows = pending(conn, limit)
     if not rows:
         counts["scored"] = 0
+        # Not a failure and worth saying plainly: after a sweep that found
+        # nothing new, or a second run in the same hour, this is the whole story.
+        report(
+            phase="finished",
+            message="Nothing new to score",
+            done=0,
+            total=None,
+            counts=tally(counts),
+        )
         return counts
 
     if use_batch:
-        counts.update(score_batch(conn, rows, wait=wait))
+        counts.update(score_batch(conn, rows, wait=wait, on_progress=report))
+        report(phase="finished", message=_summary(counts), counts=tally(counts))
         return counts
 
     scored = failed = 0
-    for row in rows:
+    for index, row in enumerate(rows):
+        report(
+            phase="scoring",
+            message=f"{row['title']} · {row['company']}",
+            done=index,
+            total=len(rows),
+            counts=tally({"scored": scored, "failed": failed}),
+        )
         try:
             apply_score(conn, score_one(conn, row))
             scored += 1
@@ -428,6 +537,7 @@ def run(
             print(f"  ! application {row['application_id']}: {exc}", file=sys.stderr)
             failed += 1
     counts.update({"scored": scored, "failed": failed})
+    report(phase="finished", message=_summary(counts), done=len(rows), counts=tally(counts))
     return counts
 
 
@@ -454,14 +564,30 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = connect()
     try:
-        if args.batch_id:
-            counts = apply_batch(conn, args.batch_id)
-        elif args.prefilter_only:
-            counts = prefilter.run(conn, limit=args.limit)
-        else:
-            counts = run(
-                conn, limit=args.limit, use_batch=not args.sync, wait=not args.no_wait
-            )
+        # All three paths take the lock. `--prefilter-only` moves rows out of
+        # `discovered` and `--batch-id` writes scores into them, so either one
+        # racing a full run is the same rows being decided twice.
+        with runs.track(conn, "score") as report:
+            if args.batch_id:
+                counts = apply_batch(conn, args.batch_id, on_progress=report)
+            elif args.prefilter_only:
+                counts = prefilter.run(conn, limit=args.limit, on_progress=report)
+            else:
+                # Reports its own finish, including the "nothing new" case.
+                counts = run(
+                    conn, limit=args.limit, use_batch=not args.sync,
+                    wait=not args.no_wait, on_progress=report,
+                )
+            if args.batch_id or args.prefilter_only:
+                report(
+                    phase="finished", message=_summary(counts),
+                    done=0, total=None, counts=tally(counts),
+                )
+    except runs.AlreadyRunning as exc:
+        # 3, so deploy/discover.sh does not paint the agent red for what is
+        # really "the dashboard got there first".
+        print(f"scoring not run: {exc}", file=sys.stderr)
+        return 3
     except (ScoreError, llm.LLMError, prefilter.PrefilterError) as exc:
         print(f"scoring failed: {exc}", file=sys.stderr)
         return 1

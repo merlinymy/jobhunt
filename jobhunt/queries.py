@@ -723,6 +723,7 @@ def packet_row(conn: sqlite3.Connection, application_id: int) -> sqlite3.Row | N
     return conn.execute(
         """
         SELECT j.apply_url, j.jd_text, j.location, j.remote, a.resume_data,
+               a.resume_findings,
                (SELECT ct.name FROM contacts ct
                  WHERE ct.company_id = j.company_id AND ct.do_not_contact = 0
                  ORDER BY ct.id LIMIT 1) AS referral
@@ -785,6 +786,25 @@ def corpus_counts(conn: sqlite3.Connection) -> dict[str, int]:
         "experiences": conn.execute("SELECT COUNT(*) AS n FROM experiences").fetchone()["n"],
         "projects": conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"],
     }
+
+
+def job_description(conn: sqlite3.Connection, application_id: int) -> sqlite3.Row | None:
+    """The whole JD for one application.
+
+    Its own query because the review batch ships an excerpt: eight full
+    descriptions is most of a megabyte on a phone, and seven of them are never
+    opened. This is the one you asked to read.
+    """
+    return conn.execute(
+        """
+        SELECT j.title, j.jd_text, j.apply_url, c.name AS company
+          FROM applications a
+          JOIN jobs j      ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.id = ?
+        """,
+        (application_id,),
+    ).fetchone()
 
 
 def unknown_question_count(conn: sqlite3.Connection) -> int:

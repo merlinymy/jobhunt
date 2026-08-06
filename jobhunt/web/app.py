@@ -12,6 +12,7 @@ SPA fallback. Routing and serialization are in `api.py`, what a page shows is in
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,13 +30,48 @@ DIST = HERE / "dist"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from .. import runs
+
     # Fail loudly at startup rather than on the first query.
     conn = db.connect()
     try:
         db.verify_schema(conn)
+        # A run whose process is gone leaves its row `running`, and the lock is
+        # then held by nobody. The common cause is this very restart — `make dev`
+        # reloading mid-sweep — so it is worth clearing before the first request
+        # rather than waiting out the ten-minute staleness rule.
+        reclaimed = runs.reclaim_stale(conn)
     finally:
         conn.close()
+    # Say where new postings come from. `uvicorn.error` deliberately: it is the
+    # one logger configured by both uvicorn's console default and logconf, so
+    # this lands on the terminal under `make dev` and in dashboard.log under
+    # launchd. A `jobhunt.*` logger would be silently dropped in dev, which is
+    # the same trap that once swallowed uvicorn's own startup banner.
+    from .. import doctor
+
+    log = logging.getLogger("uvicorn.error")
+    for level, message in doctor.discovery_status():
+        log.log(level, message)
+    if reclaimed:
+        log.warning(
+            "discovery: %d run(s) were still marked running from a previous "
+            "process and have been closed out as interrupted",
+            reclaimed,
+        )
     yield
+
+    # On the way down, close out anything this process started. Without it a
+    # restart leaves a phantom run holding the lock until its heartbeat ages
+    # out, and the button spends ten minutes refusing to do anything.
+    try:
+        conn = db.connect()
+        try:
+            runs.interrupt_owned(conn)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - the disk may be what took us down
+        pass
 
 
 app = FastAPI(title="jobhunt", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
@@ -170,6 +206,7 @@ def serve(*, reload: bool = False, wait_for_db: float = 0.0) -> None:
     The default is now the safe one: forgetting the flag gets you production.
     """
     import uvicorn
+    from uvicorn.config import LOGGING_CONFIG
 
     from .. import config, doctor
     from . import logconf
@@ -186,7 +223,11 @@ def serve(*, reload: bool = False, wait_for_db: float = 0.0) -> None:
         port=config.PORT,
         reload=reload,
         # The reloader wants the console; a daemon wants its own rotating file.
-        log_config=None if reload else logconf.dict_config(),
+        # NOT None for the console case: uvicorn reads None as "configure no
+        # logging at all", so its handlers go missing and every startup line —
+        # INFO, below the logging.lastResort WARNING floor — is dropped. `make
+        # dev` then prints nothing at all while serving perfectly well.
+        log_config=LOGGING_CONFIG if reload else logconf.dict_config(),
         # Tailscale Serve sets X-Forwarded-*; trust it only from the local proxy.
         proxy_headers=True,
         forwarded_allow_ips="127.0.0.1",

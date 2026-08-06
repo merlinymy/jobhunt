@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import logging
 import os
 import shutil
 import sqlite3
@@ -207,6 +208,145 @@ def backups() -> Check:
     return Check("backups", True, detail)
 
 
+DISCOVER_LABEL = "com.jobhunt.discover"
+
+
+def agent_loaded(label: str = DISCOVER_LABEL) -> bool | None:
+    """Is this launchd agent loaded in the current GUI session?
+
+    None means the question could not be answered — no `launchctl`, no Aqua
+    session, or not macOS at all. Callers must not read that as a no.
+    """
+    try:
+        done = subprocess.run(
+            ["launchctl", "list", label], capture_output=True, timeout=5
+        )
+    except Exception:
+        return None
+    return done.returncode == 0
+
+
+def discovery_status() -> list[tuple[int, str]]:
+    """Where new postings come from, as (log level, message) pairs.
+
+    Called at dashboard startup. Nothing in the UI says how jobs arrive, so an
+    uninstalled discovery agent looks identical to a quiet job market: the queue
+    simply stops growing and there is no page that would tell you why.
+    """
+    out: list[tuple[int, str]] = []
+    newest: str | None = None
+    waiting: int | None = None
+    try:
+        conn = db.connect()
+    except Exception:
+        conn = None
+    if conn is not None:
+        try:
+            newest = conn.execute("SELECT max(discovered_at) FROM jobs").fetchone()[0]
+            waiting = conn.execute(
+                "SELECT count(*) FROM applications WHERE state = ?", (states.SCORED,)
+            ).fetchone()[0]
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    if newest:
+        try:
+            age_h = (
+                datetime.now(timezone.utc) - datetime.fromisoformat(newest)
+            ).total_seconds() / 3600
+            when = f"{age_h:.0f}h ago" if age_h < 48 else f"{age_h / 24:.0f} days ago"
+        except ValueError:
+            when = newest
+    else:
+        when = "never"
+    queue = "" if waiting is None else f", {waiting} scored and waiting in /review"
+    out.append((logging.INFO, f"discovery: last posting found {when}{queue}"))
+
+    if agent_loaded() is False:
+        out.append((
+            logging.WARNING,
+            "discovery: no launchd agent installed, so nothing finds new postings on "
+            "its own — run `make ingest && make score` by hand, or "
+            "`./deploy/install.sh` to schedule it for 06:30 and 18:30 daily",
+        ))
+    return out
+
+
+def discovery_runs() -> Check:
+    """Did the last sweep and the last scoring run actually work?
+
+    A failed 06:30 agent is otherwise invisible: nothing crashes, the queue just
+    stops growing, and the log that says why is one nobody reads on a good day.
+    A warning rather than a failure — a dead source is a bad week, not a broken
+    install, and this check has to stay worth reading.
+    """
+    from . import runs
+
+    try:
+        conn = db.connect()
+    except Exception as exc:
+        return Check("runs", False, f"cannot open the database: {exc}")
+    try:
+        live = runs.active(conn)
+        if live is not None:
+            return Check(
+                "runs", True,
+                f"{live['task']} running now ({live['trigger']}, started "
+                f"{runs.ago(live['started_at'])} ago)",
+            )
+        parts, unhappy = [], False
+        for task in runs.TASKS:
+            row = runs.latest(conn, task)
+            if row is None:
+                parts.append(f"{task}: never run")
+                continue
+            parts.append(f"{task}: {row['state']} {runs.ago(row['finished_at'])} ago")
+            unhappy = unhappy or row["state"] != "done"
+        return Check("runs", True, " · ".join(parts), warn=unhappy)
+    finally:
+        conn.close()
+
+
+def corpus_metrics() -> Check:
+    """Which `bullets.metric` values are being withheld from the tailor.
+
+    A number silently dropped from every resume is worse than a bad number
+    printed on one, because you cannot argue with what you cannot see. This is
+    the list to argue with — and the list to fix in `experience.yaml`, since a
+    metric worth withholding is usually a metric worth replacing.
+    """
+    from . import tailor
+
+    try:
+        conn = db.connect()
+    except Exception as exc:
+        return Check("metrics", False, f"cannot open the database: {exc}")
+    try:
+        total = conn.execute(
+            "SELECT count(*) FROM bullets WHERE metric IS NOT NULL AND metric != ''"
+        ).fetchone()[0]
+        weak = tailor.weak_metrics(conn)
+    finally:
+        conn.close()
+
+    if not total:
+        return Check("metrics", True, "no metrics set on any bullet")
+    if not weak:
+        return Check("metrics", True, f"all {total} metrics look worth quoting")
+    detail = (
+        f"{len(weak)} of {total} metrics count artifacts rather than results and are "
+        f"withheld from the tailor — bullets "
+        + ", ".join(str(bid) for bid, _ in weak[:12])
+        + (f" and {len(weak) - 12} more" if len(weak) > 12 else "")
+        + ". `python -m jobhunt.tailor --metrics` lists them."
+    )
+    # A warning, never a failure. It is a judgement about resume writing, and
+    # the corpus is hand-maintained on purpose.
+    return Check("metrics", True, detail, warn=True)
+
+
 def extras() -> Check:
     """The optional deps are imported lazily inside functions, so a venv missing
     them installs clean and then dies at 06:30 on `import jobspy`."""
@@ -285,6 +425,8 @@ CHECKS = (
     migrations,
     disk_space,
     backups,
+    discovery_runs,
+    corpus_metrics,
     extras,
     secrets,
     bind,

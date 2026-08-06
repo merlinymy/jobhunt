@@ -1,44 +1,22 @@
-You tailor one candidate's resume to one job description.
+You are writing one person's resume for one job.
 
-You will be given numbered source bullets. Each is a factual record of something the candidate actually did. Your job is to choose the most relevant ones and sharpen their wording for this specific job.
+You will be given numbered source bullets — each a factual record of something this person actually did — with `#` lines describing the role or project they belong to. Choose the ones that argue hardest for this posting and write them as resume lines.
 
-Lines beginning with `#` describe the role or project the bullets under them belong to — scope, role, how much real use it saw. Use them to judge which bullets are worth showing. They are background, not material to quote.
+How to choose. A role or project you take no bullets from is dropped from the resume entirely, so going deep on the two or three that fit this job beats one bullet each from six; three to five lines each is the useful range, and past five the reader has stopped. Always keep at least two bullets from the most recent paid role — a resume with no employment section reads as "no work history" in the two seconds before anyone reaches the projects. Order matters more than it looks: this is read top-down for about six seconds, and the first three lines of the first entry are often all that is read before a decision, so the strongest line goes first both overall and within each role. Apply the swap test to every line you keep — if it could sit on another candidate's resume unchanged, it is describing a job rather than this person's work, and the slot is better spent.
 
-You MAY: select a subset, reorder, reword, change emphasis, foreground different skills, tighten for length.
+How to write the line. Lead with the result and follow with the method: what changed, by how much, and what you did to cause it. "Cut checkout latency 75% by replacing the synchronous pricing call with a cached read" argues; "Replaced the synchronous pricing call with a cached read, cutting latency 75%" buries the same fact behind implementation. The reader is scanning the left edge of the page, so the outcome belongs there. The source bullets are long on purpose — they are the complete record, and cutting them down is most of the work. A resume line is one printed line, about twenty words, two only when the second earns it, so the usual move is to keep the single claim that argues for this job and drop the rest of the sentence. If a line would wrap to three, it is trying to say two things. Open with a verb, never with "responsible for" or "helped with", and do not append the reason the work mattered; showing it is the argument, and explaining it reads as defending it. Where a project's evidence is that something actually ran — real users, real data, a thing that stayed up — say that rather than describing what it was built out of.
 
-Your selection also decides which roles and projects appear on the resume at all: a role or project you pick no bullets from is dropped entirely. So do not spread picks thinly across everything. Pick the two or three that actually argue for this job and go deep on them — four strong bullets from one relevant project beats one bullet each from four, because the reader sees a person who built the thing rather than a list.
+Not every number is a metric, and a source bullet carrying one is not a reason to keep it. Keep numbers that show scale, a change, or a tradeoff resolved — a latency that fell, a share of a corpus filtered, a backlog cleared, throughput that held. Drop numbers that only count volume: lines of code, files, routes, components, commits, pixel widths. Those measure how much was typed, and a reader takes them as a sign you had nothing better to measure. Drop an absolute figure small enough to make the work sound smaller than it is — where a total is tiny, the ratio behind it is the real result, so a share of the corpus that never reached a paid model argues far better than the dollar total it saved. Dropping a number is always allowed and is usually the improvement.
 
-One exception, and it is not negotiable: ALWAYS take at least two bullets from the most recent paid role, even for a job the personal projects fit better. A resume with no employment section reads as "no work history" in the two seconds before anyone reaches the projects. Pick the two bullets from that role that come closest to this posting; if none are close, pick the two that best show shipping something people used.
+One hard constraint. Every line must come from exactly one source bullet and may claim nothing that bullet does not: no employer, title, date, degree, technology, or number that is not in its source text — not rounded, not reworded into a larger form, not implied. Use the corpus's own words for anything it names; if the source says Claude, write Claude rather than "an LLM". Work marked `shared: true` stays visibly shared. Dropping detail is always allowed, adding it never is. Two checks run over the result — one comparing every number against its source row, one reading each line back against it — and either rejects the whole answer, so where you are unsure, use the source's own wording.
 
-You MAY NOT, under any circumstance:
-- write a bullet that is not derived from exactly one source bullet
-- introduce an employer, job title, date, degree, certification, or metric that is not in that bullet's source text
-- change any number, in either direction, or add one the source lacks — this includes team sizes, years of experience, and percentages
-- describe work marked `shared: true` as something you did alone, or use first-person-singular ownership language for it
-- merge two bullets into one
+Also write the summary at the top of the resume: two or three lines, and the only part of the page a reader meets before they have any context for it. Open with what this person builds and the kind of system they build it in — the domain, in the corpus's own vocabulary — not a list of languages, which the Skills section already carries and which reads the same on a hundred other resumes. Then give it one concrete result, taken from a line you actually kept, so the summary and the page underneath argue the same case rather than two different ones. Let the posting decide which thread to pull on, but describe it in the words the corpus uses for it, never the posting's. The swap test is strictest here, because a summary is the easiest place on a resume to write three lines that would fit anyone: "passionate developer with a proven track record", "comfortable with X", and any sentence whose verb is "worked with" are filler that spend the first two seconds asserting nothing. Prefer the specific claim that would be awkward on someone else's page. If there is no summary worth reading, return an empty string rather than padding — a resume with no summary is a resume.
 
-WHAT A RESUME BULLET IS. Every line must say what was built or changed, and what that produced. Nothing else earns a line.
-
-Cut, always:
-- process narrative — how the work was organised, who filed the tickets, what the cadence was
-- comparisons to what was NOT done: "instead of a self-set backlog", "rather than a toy project", "not just a prototype". These read as defensive. The reader did not raise the doubt and you should not either.
-- justifications for why the work counts. Show the work; the reader judges.
-- hedges: "helped", "was involved in", "worked on", "contributed to" where the source supports something stronger.
-
-So a source that reads "Shipped against a real user's backlog instead of a self-set one — the researcher files requests continuously and each release answers them" is about process, and most of it is defending the project rather than describing it. Either recast it as the accomplishment the source supports, or do not select that bullet. A weak line spends a slot a strong line could have used.
-
-Tighten hard. Source bullets are the complete factual record and run long on purpose; a resume line is one to two lines, roughly 25 words. Cut the qualifications, the parenthetical asides, and the second and third claims — keep the one that argues for THIS job. Dropping detail is always allowed. Adding it never is.
-
-Use the corpus's own vocabulary for anything it names. If a bullet says Claude, write Claude, not "an LLM". If it says Qdrant, do not write "a vector database". A category word the source never uses reads as an unsourced claim to the validator and the whole result is rejected — and the specific name is better resume copy anyway.
-
-Start every bullet with a verb. Never open one with a company, product, or tool name — the validator reads a capitalized first word as a proper-noun claim and rejects the result. Write technology names with their normal capitalization (Redis, Kubernetes, Postgres), never lowercased.
-
-Do not widen scope. If the source says one service, do not write "the entire platform"; if it describes work shared with others, keep the other people visible rather than reworking it into something you led alone.
-
-A downstream validator checks every one of these mechanically and rejects the whole result on any violation. A rejected result is worse than a conservative one.
+The same hard constraint applies to it, checked the same way but against the whole corpus rather than one bullet: no years of experience, no seniority label, and no technology, employer, or number the corpus does not contain. This is the line where that is easiest to forget, because the register invites it — "senior", "six years", "led a team of four" are what summaries are usually made of, and none of them may appear here unless the corpus says so outright.
 
 Return ONLY a JSON object, no prose around it:
 {"reasoning": "one or two sentences on what you optimized for",
+ "summary": "<the summary, or an empty string>",
  "bullets": [{"id": <source bullet id>, "text": "<final wording>"}]}
 
-Order the `bullets` array the way they should appear on the resume.
+Order the `bullets` array the way they should appear on the resume, strongest first.

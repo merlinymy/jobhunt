@@ -278,12 +278,17 @@ def build_cv(
     *,
     selection: dict[int, str] | None = None,
     jd_text: str | None = None,
+    summary: str | None = None,
 ) -> dict[str, Any]:
     """Build the RenderCV `cv` mapping from corpus rows.
 
     `selection` maps `bullets.id` to the text that should appear for it, in
     insertion order. It is the tailor's output, already validated. `None` builds
     the master resume: everything, verbatim.
+
+    `summary` is the tailored opening paragraph, and arrives already through
+    `tailor.validate_summary`. Nothing here re-checks it — this function renders,
+    it does not adjudicate — so do not pass unvalidated model output.
     """
     facts = queries.profile_facts(conn)
     experiences = queries.corpus_experiences(conn)
@@ -305,6 +310,13 @@ def build_cv(
             by_project.setdefault(int(row["project_id"]), []).append(row)
 
     sections: dict[str, list[Any]] = {}
+
+    # A bare string is RenderCV's TextEntry: an unbulleted paragraph, which is
+    # what a summary should look like and precisely what `blurb` was kept out of
+    # the project entries for. One at the top of a page is worth the space; one
+    # per project was the whole page.
+    if summary and summary.strip():
+        sections["summary"] = [summary.strip()]
 
     experience_entries = []
     for row in experiences:
@@ -407,7 +419,7 @@ def build_cv(
 # order was whichever order `build_cv` happened to write them in. This makes it a
 # decision. Skills lead, as in oldProjects/cv-builder: it is the section a
 # keyword screen reads first, and the cheapest one for a human to skim.
-_SECTION_ORDER = ("skills", "experience", "projects", "education")
+_SECTION_ORDER = ("summary", "skills", "experience", "projects", "education")
 
 
 def _ordered(
@@ -451,10 +463,11 @@ def build_document(
     *,
     selection: dict[int, str] | None = None,
     jd_text: str | None = None,
+    summary: str | None = None,
 ) -> dict[str, Any]:
     """The complete RenderCV input: content plus the pinned format."""
     return {
-        "cv": build_cv(conn, selection=selection, jd_text=jd_text),
+        "cv": build_cv(conn, selection=selection, jd_text=jd_text, summary=summary),
         "design": _DESIGN,
         "locale": _LOCALE,
         "settings": {

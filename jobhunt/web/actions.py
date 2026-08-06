@@ -230,9 +230,12 @@ def build_packet(conn: sqlite3.Connection, application_id: int) -> str | None:
         raise
     except tailor.NoJobDescription as exc:
         return str(exc)
-    except tailor.FabricationError as exc:
-        return f"Rejected — the model asserted something the corpus does not support.\n\n{exc}"
     except (tailor.TailorError, llm.LLMError, resume.ResumeError) as exc:
+        # FabricationError no longer arrives here: the dashboard builds with
+        # `strict=False`, so a claim the corpus does not support is recorded on
+        # the row as a finding and shown beside the line it is about. What is
+        # left in this branch is genuinely unusable output — no bullets at all,
+        # unparseable JSON, a failed render — where there is nothing to show.
         return f"{type(exc).__name__}: {exc}"
     return None
 
@@ -319,7 +322,10 @@ def tailor_against(
     pdf_name = f"tailored_{stamp}_{secrets.token_hex(3)}.pdf"
     try:
         resume.render(
-            resume.build_document(conn, selection=result.selection(), jd_text=jd_text),
+            resume.build_document(
+                conn, selection=result.selection(), jd_text=jd_text,
+                summary=result.summary,
+            ),
             config.OUT_DIR / pdf_name,
         )
     except resume.ResumeError as exc:

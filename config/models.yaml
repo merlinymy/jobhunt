@@ -41,6 +41,62 @@ tasks:
     # roughly 5k; 8000 leaves room for a corpus that keeps growing.
     max_tokens: 8000
     cache_profile: true      # profile corpus is identical every call
+  tailor_check:
+    # Reads each emitted line against its own source row and says whether the
+    # claim is supported. Sonnet because this is a comparison, not composition —
+    # and measured at ~1.5k in / 400 out it adds 5% to a packet, or 69c a month.
+    #
+    # Deliberately a *different* model from `tailor`. Two calls to one model
+    # share its blind spots: a fabrication Opus finds plausible enough to write,
+    # Opus finds plausible enough to pass. This is the cheapest decorrelation
+    # available, and the reason not to "save a call" by asking Opus to check
+    # itself in the same reply.
+    model: claude-sonnet-5
+    # 2000 was sized from the JSON reply alone — about 400 tokens — and truncated
+    # on the first real packet, which is exactly the mistake the note above this
+    # block describes. The budget covers reasoning too, and this task reasons per
+    # pair: ten lines each compared against their own source is ten separate
+    # judgements before a word of the reply is written. Sized generously because
+    # you are billed for tokens produced, not for the ceiling, and because a
+    # truncated reply here fails the packet rather than degrading it.
+    max_tokens: 8000
+    cache_profile: false     # the corpus is not sent — see config/prompts/tailor_check.md
+  gaps:
+    # Runs once per application, before tailoring, and its answer is stored — it
+    # depends only on (posting, corpus), and neither changes between a build and
+    # its rebuilds. So this is a handful of calls a day, not one per rebuild.
+    #
+    # Opus because the useful half is a judgement call, not a lookup: deciding
+    # that "deployed containerised services behind a tunnel and kept them alive
+    # across reboots" is the honest answer to a posting asking for AWS is exactly
+    # the reasoning a cheaper tier flattens into keyword overlap. A weak answer
+    # here is worse than none — it puts a stretch in front of an interviewer.
+    model: claude-opus-5
+    # 4000 truncated on the first real posting. The budget covers reasoning, and
+    # this task reasons per gap: each one is a pass over the whole corpus asking
+    # "is there anything adjacent to this", before a word of the reply is
+    # written. Same shape as tailor_check, and the same lesson — you are billed
+    # for tokens produced, not for the ceiling, so size it generously.
+    max_tokens: 8000
+    cache_profile: true      # the corpus block is the same one `tailor` sends
+  tailor_revise:
+    # Conversational revision of a built resume, and deliberately **the same
+    # prompt as `tailor`** rather than one of its own. The chat replays the
+    # build's actual exchange as prior turns, so the model is continuing the
+    # conversation that wrote the resume — it already has the rules, its own
+    # output, and the reasoning it wrote at the time. A second system prompt
+    # would be a copy of the first that goes stale, and swapping the system
+    # prompt underneath a conversation is not "the same session" in any sense
+    # that matters.
+    #
+    # It stays a separate task key only so `llm_calls` can tell a revision from
+    # a build. Same file, same model, same ceiling; different row in the ledger,
+    # which is what keeps the output-token comparison in prompts/README.md
+    # honest.
+    system_prompt: prompts/tailor.md
+    model: claude-opus-5
+    max_tokens: 8000         # emits a full resume plus reasoning, same as tailor
+    cache_profile: true      # same corpus every turn, byte-identical
   narrative:
     model: claude-opus-5     # "why this company"; cached per company after first call
     max_tokens: 4000         # same reasoning-shares-the-budget rule as tailor

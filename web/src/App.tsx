@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import {
-  BarChart3, ClipboardList, FileText, Inbox, Monitor, Moon, PenLine, Plus, Sun, Wand2,
+  BarChart3, ClipboardList, FileText, Inbox, Monitor, Moon, PenLine, Plus, Sun,
+  Terminal, Wand2,
 } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet, ScrollRestoration } from "react-router-dom";
@@ -22,6 +23,7 @@ const PRIMARY: NavItem[] = [
 const SECONDARY: NavItem[] = [
   { to: "/applications/new", label: "Log application", icon: Plus },
   { to: "/tailor", label: "Tailor", icon: Wand2 },
+  { to: "/prompts", label: "Prompts", icon: Terminal },
 ];
 
 const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [

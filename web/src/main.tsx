@@ -14,6 +14,7 @@ import NewApplication from "./routes/NewApplication";
 import NotFound from "./routes/NotFound";
 import Packet from "./routes/Packet";
 import Pipeline from "./routes/Pipeline";
+import Prompts from "./routes/Prompts";
 import Review from "./routes/Review";
 import Stats from "./routes/Stats";
 import Tailor from "./routes/Tailor";
@@ -62,6 +63,7 @@ const router = createBrowserRouter([
       { path: "/applications/:id", element: <ApplicationDetail /> },
       { path: "/packet/:id", element: <Packet /> },
       { path: "/tailor", element: <Tailor /> },
+      { path: "/prompts", element: <Prompts /> },
       { path: "/fill", element: <Fill /> },
       { path: "/stats", element: <Stats /> },
       { path: "*", element: <NotFound /> },
