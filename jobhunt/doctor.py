@@ -309,6 +309,44 @@ def discovery_runs() -> Check:
         conn.close()
 
 
+def corpus_metrics() -> Check:
+    """Which `bullets.metric` values are being withheld from the tailor.
+
+    A number silently dropped from every resume is worse than a bad number
+    printed on one, because you cannot argue with what you cannot see. This is
+    the list to argue with — and the list to fix in `experience.yaml`, since a
+    metric worth withholding is usually a metric worth replacing.
+    """
+    from . import tailor
+
+    try:
+        conn = db.connect()
+    except Exception as exc:
+        return Check("metrics", False, f"cannot open the database: {exc}")
+    try:
+        total = conn.execute(
+            "SELECT count(*) FROM bullets WHERE metric IS NOT NULL AND metric != ''"
+        ).fetchone()[0]
+        weak = tailor.weak_metrics(conn)
+    finally:
+        conn.close()
+
+    if not total:
+        return Check("metrics", True, "no metrics set on any bullet")
+    if not weak:
+        return Check("metrics", True, f"all {total} metrics look worth quoting")
+    detail = (
+        f"{len(weak)} of {total} metrics count artifacts rather than results and are "
+        f"withheld from the tailor — bullets "
+        + ", ".join(str(bid) for bid, _ in weak[:12])
+        + (f" and {len(weak) - 12} more" if len(weak) > 12 else "")
+        + ". `python -m jobhunt.tailor --metrics` lists them."
+    )
+    # A warning, never a failure. It is a judgement about resume writing, and
+    # the corpus is hand-maintained on purpose.
+    return Check("metrics", True, detail, warn=True)
+
+
 def extras() -> Check:
     """The optional deps are imported lazily inside functions, so a venv missing
     them installs clean and then dies at 06:30 on `import jobspy`."""
@@ -388,6 +426,7 @@ CHECKS = (
     disk_space,
     backups,
     discovery_runs,
+    corpus_metrics,
     extras,
     secrets,
     bind,
