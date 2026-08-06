@@ -261,8 +261,27 @@ def packet_view(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]
         "has_jd": bool((row["jd_text"] or "").strip()),
         "diff": diff,
         "pdf": pdf_meta,
+        # None = never built. [] = built and nothing objected, which is a claim
+        # worth making rather than the same silence as "not checked".
+        "findings": _findings(row["resume_findings"]),
         "error": None,
     }
+
+
+def _findings(raw: str | None) -> list[dict[str, Any]] | None:
+    """`applications.resume_findings` -> what the packet page shows.
+
+    Tolerant on purpose: a row written before the column existed, or by a build
+    that crashed mid-write, should render a packet with no annotations rather
+    than 500 the page that exists to show you the resume.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) else None
 
 
 def answers_view(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]:
