@@ -33,3 +33,18 @@ export function since(seconds: number | null | undefined): string {
   if (seconds < 48 * 3600) return `${Math.floor(seconds / 3600)}h`;
   return `${Math.floor(seconds / 86400)}d`;
 }
+
+/** `4:31`, `1:02:17` — elapsed time for something still going.
+ *
+ *  `since()` is wrong for this. A scoring batch sits on the same tally for
+ *  minutes at a stretch, so with a label reading "5m" for sixty seconds the
+ *  only moving part on screen is a spinner, and the honest report from that is
+ *  "it looks stuck". Seconds are the cheapest possible proof of life.
+ */
+export function elapsed(seconds: number | null | undefined): string {
+  const total = Math.floor(Math.max(seconds ?? 0, 0));
+  const s = String(total % 60).padStart(2, "0");
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}

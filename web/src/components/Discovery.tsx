@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { useStartRun } from "../api/mutations";
 import { useRuns } from "../api/queries";
 import type { Run, RunPipeline, Runs } from "../api/types";
-import { since } from "../lib/format";
+import { elapsed, since } from "../lib/format";
 import { Button } from "./ui";
 import { Sheet } from "./Sheet";
 
@@ -22,7 +22,9 @@ import { Sheet } from "./Sheet";
  * worker does not need an edit here to stop it printing a bare identifier.
  */
 
-const TASK_NOUN: Record<Run["task"], string> = { ingest: "Sweep", score: "Scoring" };
+const TASK_NOUN: Record<Run["task"], string> = {
+  ingest: "Sweep", score: "Scoring", packet: "Packets",
+};
 
 /** A run started elsewhere is worth naming. Finding the dashboard busy at 06:31
  *  is confusing right up until it says the scheduled agent is the one running. */
@@ -37,16 +39,53 @@ function counts(run: Run | null | undefined): string {
   return entries.map(([label, n]) => `${n} ${label}`).join(" · ");
 }
 
+/** Phases where the tallies legitimately sit still for minutes, and the reason.
+ *
+ *  A scoring batch returns in bulk: `0 returned` out of 3,876 after five
+ *  minutes is the API working normally, and is indistinguishable from a hang
+ *  unless something says so. */
+const PHASE_HINT: Record<string, string> = {
+  waiting:
+    "Batches come back in bulk rather than trickling in, so this stays at zero "
+    + "and then finishes all at once. Up to 45 minutes; nothing is lost if you "
+    + "close the tab.",
+  submitting: "Uploading the batch. The tally starts once the API accepts it.",
+};
+
+/** Server-measured age, ticking between the three-second polls.
+ *
+ *  The age is taken from the server so a skewed laptop clock cannot report a
+ *  run from the future; this only interpolates forward from the last poll. */
+function useLiveAge(ageSeconds: number | null, live: boolean): number {
+  const anchor = useRef({ at: Date.now(), age: ageSeconds ?? 0 });
+  const [, tick] = useState(0);
+
+  useEffect(() => {
+    anchor.current = { at: Date.now(), age: ageSeconds ?? 0 };
+  }, [ageSeconds]);
+
+  useEffect(() => {
+    if (!live) return;
+    const id = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [live]);
+
+  return anchor.current.age + (live ? (Date.now() - anchor.current.at) / 1000 : 0);
+}
+
 /** The live panel: which step, what it is on, how far through, what it has found. */
 function Progress({ run, labels }: { run: Run; labels: Record<string, string> }) {
   const progress = run.progress;
   const phase = (progress && labels[progress.phase]) || "Working";
   const total = progress?.total ?? 0;
   const done = progress?.done ?? 0;
-  // A bar needs a real denominator. The batch wait has one because the API
-  // reports its own per-request tallies; "storing" briefly does not.
-  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
+  // A bar needs a real denominator *and* something on it. A determinate bar
+  // pinned at 0% for five minutes is a worse lie than no bar: it says "no
+  // progress", when the truth is "the batch has not answered yet".
+  const pct = total > 0 && done > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
   const tally = counts(run);
+  const hint = progress ? PHASE_HINT[progress.phase] : undefined;
+  const age = useLiveAge(run.age_seconds, true);
 
   return (
     <div className="card p-3 sm:p-4" role="status" aria-live="polite">
@@ -61,7 +100,7 @@ function Progress({ run, labels }: { run: Run; labels: Record<string, string> })
         {TRIGGER_NOTE[run.trigger] && (
           <span className="text-sm text-dim">· {TRIGGER_NOTE[run.trigger]}</span>
         )}
-        <span className="ml-auto text-sm tabular text-dim">{since(run.age_seconds)}</span>
+        <span className="ml-auto text-sm tabular text-dim">{elapsed(age)}</span>
       </div>
 
       {progress?.message && (
@@ -91,6 +130,8 @@ function Progress({ run, labels }: { run: Run; labels: Record<string, string> })
           </span>
         )}
       </div>
+
+      {hint && <p className="mt-2 text-xs leading-relaxed text-dim">{hint}</p>}
     </div>
   );
 }
@@ -148,11 +189,17 @@ export function Discovery({ className }: { className?: string }) {
   const watching = useRef<number | null>(null);
 
   const active = data?.active ?? null;
+  // A packet build is shown here — it is the same machinery and worth watching —
+  // but it must not disable this button. The lock is per task, so starting a
+  // sweep while resumes are being written is legal, and greying out discovery
+  // because an unrelated task holds an unrelated lock would be a lie the server
+  // would then contradict with a 202.
+  const blocking = active && active.task !== "packet" ? active : null;
   // Both guards matter. `disabled` covers the ordinary case; the check inside
   // the handler covers a double-tap that fires twice before React re-renders,
   // which React Query does not deduplicate for mutations. The server's 409 is
   // still the authority — these two only keep it from being the common path.
-  const busy = start.isPending || active !== null;
+  const busy = start.isPending || blocking !== null;
 
   useEffect(() => {
     if (!data) return;
@@ -164,7 +211,8 @@ export function Discovery({ className }: { className?: string }) {
 
     // /api/runs is one statement, so a snapshot that no longer shows a run as
     // active always shows it recorded. No polling for the result.
-    const finished = [data.last.ingest, data.last.score].find((run) => run?.id === previous);
+    const finished = [data.last.ingest, data.last.score, data.last.packet]
+      .find((run) => run?.id === previous);
     for (const key of ["pipeline", "applications", "stats", "review"]) {
       void qc.invalidateQueries({ queryKey: [key] });
     }
@@ -197,7 +245,7 @@ export function Discovery({ className }: { className?: string }) {
           className="flex-1 sm:flex-none"
         >
           {!start.isPending && <RefreshCw className="size-4" aria-hidden />}
-          {active ? "Running…" : "Find new jobs"}
+          {blocking ? "Running…" : "Find new jobs"}
         </Button>
         <Button
           onClick={() => setMenu(true)}

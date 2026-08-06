@@ -1,10 +1,12 @@
-import { Check, ExternalLink, Handshake, SkipForward, Undo2 } from "lucide-react";
+import {
+  ArrowRight, Check, ExternalLink, Handshake, Loader2, SkipForward, Undo2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { useDecide } from "../api/mutations";
-import { useReview } from "../api/queries";
+import { useJobDescription, useReview, useRuns } from "../api/queries";
 import type { ReviewCard } from "../api/types";
 import { Discovery } from "../components/Discovery";
 import { Sheet } from "../components/Sheet";
@@ -12,6 +14,38 @@ import { Button, Card, ErrorState, Pill, Spinner } from "../components/ui";
 import { scoreTone } from "../lib/states";
 
 type Decided = ReviewCard & { decided?: "approved" | "skipped"; pending?: boolean };
+
+/** The whole posting, not the 1,200-character excerpt the card carries.
+ *
+ *  The excerpt exists so eight cards are not eight full descriptions on a phone;
+ *  it was never meant to be what you read. Falls back to the excerpt while the
+ *  fetch is in flight, so opening a card is never a blank panel. */
+function Description({ card }: { card: ReviewCard | null }) {
+  const { data, isPending, error } = useJobDescription(card?.application_id ?? null);
+  if (!card) return null;
+
+  const full = data?.jd_text;
+  if (error && !card.excerpt) return <ErrorState error={error} />;
+  if (!full && isPending) {
+    return (
+      <>
+        <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed opacity-60">
+          {card.excerpt}
+        </pre>
+        <p className="mt-3 text-sm text-dim">Loading the rest…</p>
+      </>
+    );
+  }
+  const text = full || card.excerpt;
+  return text ? (
+    <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">{text}</pre>
+  ) : (
+    <p className="text-sm text-dim">
+      This posting arrived without a description — a board poll returns whatever the
+      company published. The link on the card has the real thing.
+    </p>
+  );
+}
 
 /** Skip is terminal. `(skipped, *)` is absent from states.TRANSITIONS, so there
  *  is no way back — and a big thumb-reachable Skip button is a new risk that the
@@ -24,6 +58,10 @@ export default function Review() {
   const limit = Number(params.get("limit") ?? 8);
   const { data, isPending, error, refetch } = useReview(limit);
   const decide = useDecide(limit);
+  // Approving starts a packet build; this is only used to swap the link label
+  // while one is going, so an idle poll is not worth paying for.
+  const { data: runs } = useRuns();
+  const building = runs?.active?.task === "packet";
   const [reading, setReading] = useState<ReviewCard | null>(null);
   const pendingSkip = useRef(new Map<number, number>());
 
@@ -139,9 +177,31 @@ export default function Review() {
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {card.decided ? (
-                  <Pill tone={card.decided === "approved" ? "text-good" : "text-dim"}>
-                    {card.decided}
-                  </Pill>
+                  <>
+                    <Pill tone={card.decided === "approved" ? "text-good" : "text-dim"}>
+                      {card.decided}
+                    </Pill>
+                    {/* The whole point of approving. It used to be five clicks
+                        away on another page; the build is already running by
+                        the time this renders. */}
+                    {card.decided === "approved" && (
+                      <Link
+                        to={`/packet/${card.application_id}`}
+                        className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline"
+                      >
+                        {building ? (
+                          <>
+                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                            building packet
+                          </>
+                        ) : (
+                          <>
+                            Open packet <ArrowRight className="size-3.5" aria-hidden />
+                          </>
+                        )}
+                      </Link>
+                    )}
+                  </>
                 ) : (
                   <>
                     <Button variant="primary" onClick={() => approve(card)} className="flex-1 sm:flex-none">
@@ -179,9 +239,7 @@ export default function Review() {
         title={reading?.title ?? ""}
         side="full"
       >
-        <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-          {reading?.excerpt}
-        </pre>
+        <Description card={reading} />
       </Sheet>
     </div>
   );

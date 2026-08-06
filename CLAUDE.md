@@ -61,7 +61,12 @@ assertions that raise over tests that assert whatever the code currently does.
 - `applications.resume_pdf` and `answers_json` hold the **exact** bytes and JSON submitted.
   Never reconstruct a past submission from current templates.
 - Tailoring may select, reorder, and reword rows from `bullets`. It may never introduce an
-  employer, title, date, degree, or metric absent from those rows. The validator raises.
+  employer, title, date, degree, or metric absent from those rows. Two checks enforce it and
+  the split is deliberate: **numbers stay in code** — every figure and identifier in the
+  output must appear in its own source row, which is exact comparison and where a model is
+  unreliable — and **everything that is reading goes to a model**, on a different tier from
+  the one that wrote it. Regex guessing at whether `Stopped` was a verb or a company produced
+  every false rejection this system ever made. Both raise; neither warns.
 - `answers.tier = 'fact'` is returned verbatim. Never LLM-generated, never paraphrased.
 - Workers are stateless and idempotent. Rerunning must not duplicate rows. Guard on
   `jobs.apply_url_norm` and on `events`.

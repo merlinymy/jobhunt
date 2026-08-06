@@ -3,7 +3,7 @@ PY := .venv/bin/python
 .DEFAULT_GOAL := help
 .PHONY: help venv migrate load-profile dev ingest score tailor inbox chat \
         install-agents agents-stop doctor backup test \
-        build-web dev-web check-web profile-push profile-pull
+        build-web dev-web check-web profile-push profile-pull test-live
 
 help:  ## list targets
 	@grep -hE '^[a-z-]+:.*?##' $(MAKEFILE_LIST) | sort | awk -F':.*?## ' '{printf "  \033[1m%-14s\033[0m %s\n", $$1, $$2}'
@@ -73,6 +73,9 @@ check-web:  ## eslint + tsc on the frontend
 test: $(PY)  ## the table-driven suites (standalone scripts, not pytest)
 	$(PY) tests/test_url_normalization.py
 	$(PY) tests/test_tailoring_validator.py
+
+test-live: $(PY)  ## score the model checker against the adversarial fixtures (costs cents)
+	$(PY) tests/test_tailoring_validator.py --live
 
 inbox: $(PY)  ## poll Gmail, classify, update states
 	$(PY) -m jobhunt.inbox

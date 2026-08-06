@@ -128,24 +128,12 @@ def build_corpus(db_path: Path):
 
 FABRICATIONS: list[tuple[str, list[dict]]] = [
     (
-        "invented employer",
-        [{"id": 1, "text": "At Stripe, cut p99 checkout latency from 840ms to 210ms."}],
-    ),
-    (
         "shifted date",
         [{"id": 1, "text": "Since 2019, cut p99 checkout latency from 840ms to 210ms."}],
     ),
     (
         "inflated metric",
         [{"id": 3, "text": "Reduced infrastructure spend 45% by rightsizing worker pools."}],
-    ),
-    (
-        "fabricated degree",
-        [{"id": 1, "text": "Applied PhD-level queueing theory to cut latency 840ms to 210ms."}],
-    ),
-    (
-        "shared credit rewritten as solo",
-        [{"id": 2, "text": "I single-handedly migrated the order service off shared Postgres."}],
     ),
     # Beyond the required five: the failures a real model actually produces.
     (
@@ -167,28 +155,12 @@ FABRICATIONS: list[tuple[str, list[dict]]] = [
         "number invented outright",
         [{"id": 2, "text": "Migrated 47 services off a shared Postgres instance."}],
     ),
-    (
-        "shared credit claimed with 'my'",
-        [{"id": 2, "text": "Drove my migration of the order service off shared Postgres."}],
-    ),
     ("empty text", [{"id": 1, "text": "   "}]),
     ("no bullets at all", []),
     ("missing the id field", [{"text": "Cut latency."}]),
     # Bypasses found auditing Phase 2. Each of these was ACCEPTED before the fix,
     # and each is a one-word edit away from a case that was already rejected —
     # which is exactly why the originals were not enough on their own.
-    (
-        "invented employer as the first word (was: only caught after 'At ')",
-        [{"id": 1, "text": "Stripe checkout latency cut from 840ms to 210ms."}],
-    ),
-    (
-        "invented tool after a semicolon (clause-initial bypass)",
-        [{"id": 3, "text": "Rightsized worker pools; Datadog dashboards proved the 18% saving."}],
-    ),
-    (
-        "invented product opening the second sentence",
-        [{"id": 2, "text": "Migrated the order service off shared Postgres. Kubernetes handled the cutover."}],
-    ),
     (
         "metric changed downward to a small number (was: whitelisted)",
         [{"id": 3, "text": "Reduced infrastructure spend 5% by rightsizing worker pools."}],
@@ -207,28 +179,16 @@ FABRICATIONS: list[tuple[str, list[dict]]] = [
     ),
     # The four classes the pronoun/proper-noun/digit checks could not see.
     # Shared credit claimed with an ownership verb and no banned word:
-    (
-        "shared credit taken over by 'Led'",
-        [{"id": 2, "text": "Led the migration of the order service off shared Postgres."}],
-    ),
-    (
-        "shared credit taken over by 'Owned'",
-        [{"id": 2, "text": "Owned and executed the order service migration off shared Postgres."}],
-    ),
-    (
-        "shared credit taken over by 'Spearheaded'",
-        [{"id": 2, "text": "Spearheaded the order service migration off shared Postgres."}],
-    ),
-    # Scope widened with ordinary words — no proper noun, no number:
-    (
-        "scope widened to the whole company",
-        [{"id": 2, "text": "Migrated the entire company platform off shared Postgres "
-                           "with a four-engineer team."}],
-    ),
-    (
-        "scope widened to 'every'",
-        [{"id": 3, "text": "Reduced infrastructure spend 18% by rightsizing every worker pool."}],
-    ),
+    # An invented employer still has to be caught at the start of a clause, which
+    # is the hole the verb-morphology escape could have opened. "Stripe" is not a
+    # participle and is not in the corpus, so it is still a name.
+    # There were two scope-widening cases here — "the entire company platform"
+    # and "every worker pool". The wordlist that caught them is gone on purpose
+    # (see the note in tailor.validate): it was the one check that fired on
+    # ordinary English rather than a checkable claim, and the prompt it forced
+    # was most of why the output read like it was written for a linter.
+    # Overclaimed scope is now caught by reading the diff, which is required
+    # before the resume is used anyway.
     # Numbers spelled out:
     (
         "invented count written as a word",
@@ -261,14 +221,6 @@ FABRICATIONS: list[tuple[str, list[dict]]] = [
         [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms at Ѕtripe."}],
     ),
     # A technology the corpus knows, but from a different parent:
-    (
-        "tool borrowed from another parent, lowercase",
-        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms using kubernetes."}],
-    ),
-    (
-        "tool borrowed from another parent, capitalised",
-        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms on Grafana dashboards."}],
-    ),
 ]
 
 # --------------------------------------------------------------------------
@@ -326,22 +278,28 @@ LEGITIMATE: list[tuple[str, list[dict]]] = [
         [{"id": 1, "text": "Cut checkout latency at the 99th percentile from 840ms to 210ms."}],
     ),
     (
+        # One sentence, deliberately. The two-sentence version — "Migrated the
+        # order service. Worked alongside a four-engineer team." — was here and
+        # the checker rejected it, on the grounds that splitting the migration
+        # into its own sentence attributes it solely and relegates the team to
+        # an aside. That reading is right, and the regex that used to accept
+        # this was only looking at whether the first word was a team verb.
         "shared credit, clause-initial team verb",
-        [{"id": 2, "text": "Migrated the order service off shared Postgres. Worked alongside "
-                           "a four-engineer platform team."}],
+        [{"id": 2, "text": "Worked with a four-engineer platform team to migrate the order "
+                           "service off shared Postgres."}],
     ),
     # Guards on the four checks above. Each fails toward rejection, so what must
     # keep passing has to be pinned down as tightly as what must not.
     (
-        # Opens on a verb that is neither team-voice nor the source's, so it
-        # passes only because the other people are still named.
-        "shared credit, ownership verb but the team is still named",
-        [{"id": 2, "text": "Drove the order service migration off shared Postgres "
-                           "alongside a four-engineer platform team."}],
-    ),
-    (
+        # The source's own verb, and the team still visible. Dropping the team
+        # entirely — "Migrated the order service off a shared Postgres instance."
+        # — was here instead, and the checker rejected it: for work the source
+        # calls shared, omitting the collaborators is not dropping detail, it is
+        # changing who did it. That reading is right, and it is stricter than the
+        # regex, which only looked at the opening verb.
         "shared credit, source's own verb kept",
-        [{"id": 2, "text": "Migrated the order service off a shared Postgres instance."}],
+        [{"id": 2, "text": "Migrated the order service off shared Postgres with a "
+                           "four-engineer platform team."}],
     ),
     (
         "scope word the source itself claims",
@@ -366,8 +324,8 @@ LEGITIMATE: list[tuple[str, list[dict]]] = [
     ),
     (
         "ordinary lowercase word that is not a corpus name",
-        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms with an in-memory "
-                           "cache in front of the pricing call."}],
+        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms by caching the "
+                           "pricing call instead of blocking on it."}],
     ),
     # Guards on the identifier and homoglyph checks. Both fail toward rejection,
     # so what must keep passing is pinned as tightly as what must not.
@@ -383,6 +341,178 @@ LEGITIMATE: list[tuple[str, list[dict]]] = [
         "identifier from the parent's tech list, not this bullet's sentence",
         [{"id": 5, "text": "Built the rollout pipeline on Kubernetes, shipping the dashboard "
                            "to each cluster."}],
+    ),
+    # Clause-initial verbs. Capitalization means nothing at the start of a
+    # sentence, so these used to be checked against a list of two hundred verbs
+    # and rejected when the list came up short — `Stopped` cost a real packet.
+    # Regular past tenses are now recognised by morphology and irregulars by a
+    # short list, so what has to be pinned is that ordinary verbs get through.
+    (
+        "regular past tense the whitelist never had",
+        [{"id": 1, "text": "Stopped the synchronous pricing call from blocking checkout, "
+                           "cutting latency from 840ms to 210ms."}],
+    ),
+    (
+        "another regular past tense, mid-sentence clause start",
+        [{"id": 3, "text": "Reduced infrastructure spend 18%. Traced the waste to "
+                           "over-provisioned worker pools."}],
+    ),
+    (
+        "irregular past tense, no suffix to recognise",
+        [{"id": 1, "text": "Took p99 checkout latency from 840ms to 210ms by replacing the "
+                           "synchronous pricing call."}],
+    ),
+    (
+        "gerund opening",
+        [{"id": 1, "text": "Replacing the synchronous pricing call with a cached read cut "
+                           "checkout latency to 210ms."}],
+    ),
+]
+
+# --------------------------------------------------------------------------
+# The resume summary. Prose about the person rather than about one bullet, so
+# it is checked against the whole corpus — but checked, because a summary is
+# the easiest place on a resume to acquire a seniority label or a round number
+# of years that nothing supports. It is written in the register that invites
+# exactly that.
+# --------------------------------------------------------------------------
+
+SUMMARY_FABRICATIONS = [
+    (
+        "invented years of experience",
+        "Backend engineer with 8 years building payments infrastructure.",
+    ),
+    (
+        "years of experience spelled out",
+        "Backend engineer with nine years on high-traffic systems.",
+    ),
+    (
+        "an identifier bent out of shape",
+        "Backend engineer who holds p95 checkout latency at 210ms.",
+    ),
+]
+
+SUMMARY_LEGITIMATE = [
+    ("empty is allowed — the prompt may decline to write one", ""),
+    (
+        "everything in it comes from the corpus",
+        "Backend engineer working in Python and Postgres. Cut p99 checkout latency "
+        "from 840ms to 210ms and migrated the order service off shared Postgres.",
+    ),
+    (
+        "combines two different parents, which the whole corpus licenses",
+        "Backend engineer who built the Fleet Dashboard rollout pipeline on Kubernetes "
+        "and reduced infrastructure spend 18% at Northwind Logistics.",
+    ),
+    (
+        "ordinary prose that names nothing",
+        "Backend engineer who likes latency work and leaves systems simpler.",
+    ),
+]
+
+
+# --------------------------------------------------------------------------
+# Cases the arithmetic checks cannot see, because they are reading tasks:
+# an invented employer, a category word standing in for a specific one, work
+# rewritten from shared to solo. These are `tailor.review`'s job, and it is a
+# model call — so they run only under `--live`, which costs a few cents and
+# needs a key. This is the eval that says whether the checker earns its place.
+# --------------------------------------------------------------------------
+
+SEMANTIC_FABRICATIONS = [
+    # Was in LEGITIMATE, on the regex's rule that an ownership verb is acceptable
+    # so long as the team is still named somewhere in the line. The checker
+    # disagreed and is right: the source says "as part of a four-engineer team" —
+    # a member — and "Drove" claims leadership that naming the team does not undo.
+    #
+    # It also passed on one live run and failed on the next, which is the honest
+    # characteristic of a model checker: borderline lines are not deterministic.
+    # The retry absorbs a spurious rejection; a spurious pass is caught by the
+    # diff. Both are survivable, and neither was true of the regex.
+    (
+        "ownership verb over shared work, team named but not credited",
+        [{"id": 2, "text": "Drove the order service migration off shared Postgres "
+                           "alongside a four-engineer platform team."}],
+    ),
+    # Found by the checker on its first run, against a case the regex passed and
+    # this file called legitimate: "cached read path" does not say in-memory.
+    (
+        "unsourced specificity — a detail the source does not give",
+        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms with an in-memory "
+                           "cache in front of the pricing call."}],
+    ),
+    (
+        "invented employer",
+        [{"id": 1, "text": "At Stripe, cut p99 checkout latency from 840ms to 210ms."}],
+    ),
+    (
+        "fabricated degree",
+        [{"id": 1, "text": "Applied PhD-level queueing theory to cut latency 840ms to 210ms."}],
+    ),
+    (
+        "shared credit rewritten as solo",
+        [{"id": 2, "text": "I single-handedly migrated the order service off shared Postgres."}],
+    ),
+    (
+        "shared credit claimed with 'my'",
+        [{"id": 2, "text": "Drove my migration of the order service off shared Postgres."}],
+    ),
+    (
+        "invented employer as the first word (was: only caught after 'At ')",
+        [{"id": 1, "text": "Stripe checkout latency cut from 840ms to 210ms."}],
+    ),
+    (
+        "invented tool after a semicolon (clause-initial bypass)",
+        [{"id": 3, "text": "Rightsized worker pools; Datadog dashboards proved the 18% saving."}],
+    ),
+    (
+        "invented product opening the second sentence",
+        [{"id": 2, "text": "Migrated the order service off shared Postgres. Kubernetes handled the cutover."}],
+    ),
+    (
+        "shared credit taken over by 'Led'",
+        [{"id": 2, "text": "Led the migration of the order service off shared Postgres."}],
+    ),
+    (
+        "shared credit taken over by 'Owned'",
+        [{"id": 2, "text": "Owned and executed the order service migration off shared Postgres."}],
+    ),
+    (
+        "shared credit taken over by 'Spearheaded'",
+        [{"id": 2, "text": "Spearheaded the order service migration off shared Postgres."}],
+    ),
+    (
+        "invented employer opening a clause",
+        [{"id": 1, "text": "Cut checkout latency to 210ms. Stripe's pricing call was "
+                           "replaced with a cached read."}],
+    ),
+    (
+        "invented employer opening the bullet",
+        [{"id": 1, "text": "Northwind Logistics and Datadog dashboards tracked p99 "
+                           "checkout latency at 210ms."}],
+    ),
+    (
+        "tool borrowed from another parent, lowercase",
+        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms using kubernetes."}],
+    ),
+    (
+        "tool borrowed from another parent, capitalised",
+        [{"id": 1, "text": "Cut p99 checkout latency from 840ms to 210ms on Grafana dashboards."}],
+    ),
+]
+
+SEMANTIC_SUMMARY_FABRICATIONS = [
+    (
+        "an employer the corpus never mentions",
+        "Backend engineer, previously at Stripe, focused on latency work.",
+    ),
+    (
+        "a degree the corpus does not hold",
+        "Backend engineer with a PhD in distributed systems.",
+    ),
+    (
+        "a technology from nowhere",
+        "Backend engineer specialising in Kafka pipelines and Postgres tuning.",
     ),
 ]
 
@@ -410,14 +540,113 @@ def run() -> int:
             else:
                 print(f"  ok      accepted: {name}")
 
+        for name, summary in SUMMARY_FABRICATIONS:
+            try:
+                tailor.validate_summary(conn, summary)
+            except tailor.TailorError:
+                print(f"  ok      rejected summary: {name}")
+            else:
+                failures.append(f"NOT REJECTED (summary): {name}")
+                print(f"  FAIL    accepted a fabricated summary: {name}")
+
+        for name, summary in SUMMARY_LEGITIMATE:
+            try:
+                tailor.validate_summary(conn, summary)
+            except tailor.TailorError as exc:
+                failures.append(f"WRONGLY REJECTED (summary): {name} ({exc})")
+                print(f"  FAIL    rejected a legitimate summary: {name}\n          {exc}")
+            else:
+                print(f"  ok      accepted summary: {name}")
+
         conn.close()
 
-    total = len(FABRICATIONS) + len(LEGITIMATE)
+    total = (
+        len(FABRICATIONS) + len(LEGITIMATE)
+        + len(SUMMARY_FABRICATIONS) + len(SUMMARY_LEGITIMATE)
+    )
     print(f"\n{total - len(failures)}/{total} cases behaved correctly")
     for line in failures:
         print(f"  {line}")
     return 1 if failures else 0
 
 
+def run_live() -> int:
+    """Score `tailor.review` — the model checker — against the reading cases.
+
+    Everything here is a judgement the arithmetic checks cannot make, so this is
+    the only evidence that the half of validation now delegated to a model
+    actually works. It costs a handful of Sonnet calls and needs a key, which is
+    why it is opt-in rather than part of `make test`.
+
+    Legitimate cases are run too, and they are the ones to watch: a checker that
+    rejects everything passes the fabrication half perfectly and is useless.
+    """
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        conn = build_corpus(Path(tmp) / "fixtures.db")
+
+        def as_bullets(emitted):
+            sources = {
+                int(r["id"]): r
+                for r in conn.execute("SELECT id, text FROM bullets").fetchall()
+            }
+            return [
+                tailor.TailoredBullet(
+                    bullet_id=int(item["id"]),
+                    text=str(item["text"]),
+                    source_text=str(sources[int(item["id"])]["text"]),
+                    changed=True,
+                )
+                for item in emitted
+            ]
+
+        for name, emitted in SEMANTIC_FABRICATIONS:
+            try:
+                tailor.review(conn, as_bullets(emitted))
+            except tailor.FabricationError as exc:
+                print(f"  ok      caught: {name}\n            {str(exc).splitlines()[0]}")
+            except tailor.ReviewUnavailable as exc:
+                failures.append(f"CHECKER UNAVAILABLE: {name} ({exc})")
+                print(f"  ERROR   checker unavailable: {exc}")
+            else:
+                failures.append(f"MISSED: {name}")
+                print(f"  FAIL    missed: {name}")
+
+        for name, emitted in LEGITIMATE:
+            try:
+                tailor.review(conn, as_bullets(emitted))
+            except tailor.FabricationError as exc:
+                failures.append(f"FALSE POSITIVE: {name} ({exc})")
+                print(f"  FAIL    false positive: {name}\n            {exc}")
+            except tailor.ReviewUnavailable as exc:
+                failures.append(f"CHECKER UNAVAILABLE: {name} ({exc})")
+            else:
+                print(f"  ok      passed: {name}")
+
+        for name, summary in SEMANTIC_SUMMARY_FABRICATIONS:
+            try:
+                tailor.review_summary(conn, summary)
+            except tailor.FabricationError:
+                print(f"  ok      caught summary: {name}")
+            except tailor.ReviewUnavailable as exc:
+                failures.append(f"CHECKER UNAVAILABLE (summary): {name} ({exc})")
+            else:
+                failures.append(f"MISSED (summary): {name}")
+                print(f"  FAIL    missed summary: {name}")
+
+        conn.close()
+
+    total = (
+        len(SEMANTIC_FABRICATIONS) + len(LEGITIMATE)
+        + len(SEMANTIC_SUMMARY_FABRICATIONS)
+    )
+    print(f"\n{total - len(failures)}/{total} live cases behaved correctly")
+    for line in failures:
+        print(f"  {line}")
+    return 1 if failures else 0
+
+
 if __name__ == "__main__":
+    if "--live" in sys.argv:
+        sys.exit(run_live())
     sys.exit(run())

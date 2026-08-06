@@ -38,8 +38,15 @@ These exist to make bad states unrepresentable rather than merely untested:
 - Every `applications.state` change writes an `events` row in the same transaction. If it can't
   be one transaction, it's wrong.
 - Never `UPDATE applications SET state = ...` outside the single state-transition helper.
-- `resume_pdf` and `answers_json` are written once, at submit time, and never updated. They are
-  the record of what was actually sent.
+- `resume_pdf` and `answers_json` are frozen the moment an application is submitted, and never
+  updated after that. They are the record of what was actually sent, nothing can regenerate
+  it, and reconstructing one from current templates is forbidden outright.
+
+  Before submission they are a draft. A `packet_ready` row can be rebuilt — that is why
+  `states.py` keeps `packet_ready` out of `SUBMITTED_STATES`, and without it no prompt change
+  could ever be tried against a job already approved. The rebuild overwrites the bytes and
+  writes a `note` event saying so, so a resume that changed under you is visible in the
+  history. `tailor.BUILDABLE_STATES` is the enforcement; `SUBMITTED_STATES` is the wall.
 - Timestamps: ISO 8601 UTC, TEXT, generated in one place. Never `datetime('now')` inline in
   scattered queries.
 

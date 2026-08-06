@@ -268,7 +268,7 @@ def score_batch(
 
     # Read once for the whole batch rather than per request: a mid-submission
     # edit would otherwise split one batch across two prompt revisions.
-    instructions = llm.system_prompt("score")
+    instructions = llm.system_prompt("score", conn)
     system: list[dict[str, Any]] = [{"type": "text", "text": prefix}]
     if settings.get("cache_profile"):
         # Byte-identical across every request in the batch and across every run
