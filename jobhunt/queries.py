@@ -614,6 +614,18 @@ def corpus_bullets(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def corpus_stories(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Behavioural stories, for the prompts that answer essay questions.
+
+    Deliberately not part of `corpus_bullets`. A resume line must come from
+    exactly one `bullets` row and carries that row's id through validation; a
+    story has no id and could never survive that check. They answer a different
+    kind of question — what happened between people — and go to a different
+    set of prompts.
+    """
+    return conn.execute("SELECT * FROM stories ORDER BY id").fetchall()
+
+
 def llm_spend(conn: sqlite3.Connection, days: int = 30) -> dict[str, Any]:
     """Cost and cache behaviour over a rolling window.
 

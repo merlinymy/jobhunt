@@ -14,6 +14,7 @@ import { useBuildPacket, useGenerateAnswer, useSetAnswer } from "../api/mutation
 import { usePacket } from "../api/queries";
 import type { Answer, DiffRow, Finding, Run } from "../api/types";
 import { CopyButton } from "../components/CopyButton";
+import { FormAnswers } from "../components/FormAnswers";
 import { Gaps } from "../components/Gaps";
 import { PacketChat } from "../components/PacketChat";
 import { ResumeText } from "../components/ResumeText";
@@ -159,6 +160,7 @@ export default function Packet() {
               so a complaint can name one. */}
           <ResumeText data={data.resume_text} />
           <Gaps gaps={data.gaps} analysed={data.gaps_analysed} />
+          <FormAnswers id={id} answers={data.form_answers} />
           {data.resume_text && (
             <PacketChat id={id} messages={data.messages} disabled={!!data.run} />
           )}

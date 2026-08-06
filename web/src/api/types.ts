@@ -226,6 +226,7 @@ export interface Packet {
    *  very different statements to make to someone about to apply. */
   gaps: Gap[];
   gaps_analysed: boolean;
+  form_answers: FormAnswer[];
   messages: ChatMessage[];
   error: string | null;
 }
@@ -257,6 +258,23 @@ export interface Gap {
   say: string;
   /** Figures in `say` that no corpus row contains. Normally empty. */
   unsourced: string[];
+}
+
+/** One free-text box on the application form.
+ *
+ *  `source` is the load-bearing field. "fact" means the profile already settles
+ *  this and the single option is its recorded wording, copied verbatim — no
+ *  model wrote it. "draft" means five options were generated to pick from. */
+export interface FormAnswer {
+  question: string;
+  source: "fact" | "draft";
+  /** The catalogue key a settled question routed to. */
+  key: string | null;
+  options: string[];
+  chosen: number | null;
+  /** Option index (as a string key) -> figures no corpus row contains. */
+  unsourced: Record<string, string[]>;
+  note: string;
 }
 
 /** A proposed revision: the whole resume as it would read, not a patch. */

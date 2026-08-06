@@ -61,6 +61,18 @@ tasks:
     # truncated reply here fails the packet rather than degrading it.
     max_tokens: 8000
     cache_profile: false     # the corpus is not sent — see config/prompts/tailor_check.md
+  form_answers:
+    # Every free-text box on one form, five options each, in one call. Batched
+    # rather than one call per question so the options can differ across the set
+    # instead of five answers all reaching for the same best bullet — and so the
+    # corpus is cached once for the form rather than once per question.
+    #
+    # The output is the largest of any task here: five answers times however many
+    # boxes the form has. 12000 is sized for a long form, and you are billed for
+    # what is produced, not for the ceiling.
+    model: claude-opus-5
+    max_tokens: 12000
+    cache_profile: true
   gaps:
     # Runs once per application, before tailoring, and its answer is stored — it
     # depends only on (posting, corpus), and neither changes between a build and

@@ -24,7 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from .. import (
-    answers, chat, config, db, gaps, llm, prompts, queries, resume, runs, tailor,
+    answers, chat, config, db, formfill, gaps, llm, prompts, queries, resume, runs,
+    tailor,
 )
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 from . import actions, runner, views
@@ -396,6 +397,7 @@ def _packet_payload(
         # from into the chat box, numbered the same way the model sees it.
         "resume_text": chat.resume_text(conn, application_id),
         "gaps": [g.as_dict() for g in (gaps.stored(conn, application_id) or [])],
+        "form_answers": [d.as_dict() for d in formfill.stored(conn, application_id)],
         "gaps_analysed": gaps.stored(conn, application_id) is not None,
         "messages": chat.messages(conn, application_id),
         "error": error,
@@ -483,6 +485,43 @@ def packet_chat_apply(
         **_packet_payload(conn, application_id),
         "messages": chat.messages(conn, application_id),
     }
+
+
+class FormPaste(BaseModel):
+    pasted: str
+
+
+@router.post("/packet/{application_id}/form-answers")
+def packet_form_answers(
+    conn: Conn, application_id: int, payload: FormPaste
+) -> dict[str, Any]:
+    """Answer every free-text box on the form, five options each.
+
+    Synchronous: one model call and no render. Replaces any previous set for
+    this application rather than appending — a second paste is a correction of
+    the first, not more of it.
+    """
+    if queries.get_application(conn, application_id) is None:
+        raise HTTPException(404, "no such application")
+    try:
+        formfill.draft(conn, application_id, payload.pasted)
+    except formfill.FormError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except llm.LLMError as exc:
+        raise HTTPException(502, f"the model call failed: {exc}") from exc
+    return _packet_payload(conn, application_id)
+
+
+@router.post("/packet/{application_id}/form-answers/{index}/choose/{option}")
+def packet_form_choose(
+    conn: Conn, application_id: int, index: int, option: int
+) -> dict[str, Any]:
+    """Pick one. A drafted answer is also written to the bank for this company."""
+    try:
+        formfill.choose(conn, application_id, index, option)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return _packet_payload(conn, application_id)
 
 
 @router.post("/packet/{application_id}/answers/{key}/generate")

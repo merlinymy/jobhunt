@@ -18,7 +18,9 @@ For each gap, find what in the corpus a reasonable interviewer would accept as a
 
 Cite it with `bullet_ids`: the specific rows that carry the evidence. Those ids are what puts the adjacent work on the resume, so choose the rows that would genuinely argue it to a skeptic, not every row that mentions a related word.
 
-Then write `say`, one or two sentences in this person's own voice, that they could give verbatim when a form or an interviewer asks about the gap. Lead with the honest admission and move immediately to the evidence — "No production AWS. I have run…" — because a sentence that opens by dodging reads as dodging. Never claim the missing thing. Never imply the adjacent thing is equivalent when it is not; "smaller scale, same problem" is a stronger answer than a false equation, and it is the one that survives a follow-up question.
+Then write `say`, in this person's own voice, that they could give verbatim when a form or an interviewer asks about the gap. Lead with the honest admission and move immediately to the evidence — "No production AWS. I have run…" — because a sentence that opens by dodging reads as dodging. Never claim the missing thing. Never imply the adjacent thing is equivalent when it is not; "smaller scale, same problem" is a stronger answer than a false equation, and it is the one that survives a follow-up question.
+
+**Two or three sentences, and under sixty words.** This is spoken out loud or typed into a small box, and length is not conviction: past three sentences it reads as someone talking themselves out of the gap rather than answering it. Name one or two pieces of evidence, not every one you found — the rest are what you say when they follow up, and leaving room for a follow-up is the point. If you cannot make the case in sixty words, the adjacency is weaker than you think and the honest answer is shorter still.
 
 Every fact in `say` must come from the corpus. Naming a technology, a system, or a number the corpus does not contain turns an honest answer into a fabricated one, which is the exact failure this whole system exists to prevent.
 

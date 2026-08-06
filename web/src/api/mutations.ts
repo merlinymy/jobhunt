@@ -149,6 +149,29 @@ export function useApplyProposal(id: number) {
   });
 }
 
+/** Draft answers for every box on the form, five options each. */
+export function useDraftFormAnswers(id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (pasted: string) =>
+      api.post<Packet>(`/packet/${id}/form-answers`, { pasted }),
+    onSuccess: (data) => qc.setQueryData(k.packet(id), data),
+    /* Inline: a rejected paste is one you have to fix, and a toast that clears
+       in eight seconds is the wrong place to say what was wrong with it. */
+    meta: { silent: true },
+  });
+}
+
+/** Pick one. A drafted answer is also written to the bank for this company. */
+export function useChooseFormAnswer(id: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ index, option }: { index: number; option: number }) =>
+      api.post<Packet>(`/packet/${id}/form-answers/${index}/choose/${option}`),
+    onSuccess: (data) => qc.setQueryData(k.packet(id), data),
+  });
+}
+
 export function useGenerateAnswer(id: number) {
   const qc = useQueryClient();
   return useMutation({

@@ -1,0 +1,15 @@
+-- Answers drafted for the free-text boxes on one application's form.
+--
+-- A JSON array of `formfill.Drafted`: the question as pasted, where its answer
+-- came from, the options offered, and which one was picked.
+--
+-- Kept on the application rather than in `answers` because most of these are
+-- one-off wordings of a question no other form will ask in quite the same way,
+-- and putting them in the bank would fill it with near-duplicates. A chosen
+-- narrative answer is *also* written to `answers` against the company, which is
+-- the copy that gets reused — this column is the working set, that one is memory.
+--
+-- Fact-tier questions never store options here. Their answer is the profile's,
+-- verbatim, and the row records only which fact key matched so the page can say
+-- where the words came from.
+ALTER TABLE applications ADD COLUMN form_answers TEXT;

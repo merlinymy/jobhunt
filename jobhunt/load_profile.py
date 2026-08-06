@@ -293,7 +293,12 @@ def _load_fact_answers(conn: sqlite3.Connection, facts: dict[str, Any]) -> int:
 # `**Tags:**` and `**Role:**` are metadata, and the three bold headings are the
 # body. Anything that does not parse is skipped rather than guessed at.
 _STORY_HEADING = re.compile(r"^###\s+(?!\[)(.+?)\s*$", re.M)
-_STORY_FIELD = re.compile(r"\*\*(Situation|Action|Result|Tags|Role)\.?\*\*[:\s]*", re.I)
+# `[.:]?` rather than `\.?`: the template in stories.md writes `**Tags:**` and
+# `**Role:**` with the colon *inside* the asterisks, which the original pattern
+# did not match — so writing a story in the documented format dropped its tags
+# and its role silently. Nothing caught it because nothing had ever filled the
+# file in, and a story with no tags still loads and still looks fine.
+_STORY_FIELD = re.compile(r"\*\*(Situation|Action|Result|Tags|Role)[.:]?\*\*[:\s]*", re.I)
 
 
 def _parse_stories(text: str) -> list[dict[str, Any]]:
@@ -316,24 +321,99 @@ def _parse_stories(text: str) -> list[dict[str, Any]]:
             "title": title, "situation": fields["situation"],
             "action": fields["action"], "result": fields["result"],
             "tags": json.dumps(tags) if tags else None,
+            # Returned rather than dropped. It was parsed into `fields` and then
+            # left there, which is why `stories.experience_id` was NULL on every
+            # row the loader had ever written.
+            "role": fields.get("role", ""),
         })
     return sections
+
+
+def _resolve_role(
+    role: str, experiences: dict[str, int], projects: dict[str, int]
+) -> tuple[int | None, int | None]:
+    """`**Role:** ARC — retrieval service` -> `(experience_id, project_id)`.
+
+    Matched on the part before the dash, because that is the parent's name and
+    the rest is the writer reminding themselves what it was. Prefix rather than
+    equality: "<Employer> — Senior Engineer" should find the company without the
+    story having to repeat its exact registered name.
+
+    No fuzzy matching. A role line that names nothing recognisable leaves both
+    NULL, which loses a filter; a guess would attach the story to the wrong job,
+    which puts it in front of the wrong interviewer.
+    """
+    head = re.split(r"\s+[—–-]\s+", role.strip(), maxsplit=1)[0].strip().lower()
+    if not head:
+        return None, None
+    for name, eid in experiences.items():
+        if head.startswith(name) or name.startswith(head):
+            return eid, None
+    for name, pid in projects.items():
+        if head.startswith(name) or name.startswith(head):
+            return None, pid
+    return None, None
+
+
+# A drafted story leaves these where a human detail is missing — what someone
+# said, why you looked again. Loading one would put a placeholder in front of a
+# model, and the answer it wrote around that placeholder would be told to an
+# interviewer as personal history. stories.md says a story carrying one is not
+# finished; this is where that stops being a note and starts being enforced.
+_UNFILLED = "[[FILL:"
 
 
 def _load_stories(conn: sqlite3.Connection, path: Path) -> int:
     if not path.exists():
         return 0
-    stories = _parse_stories(path.read_text())
+    parsed = _parse_stories(path.read_text())
+    stories, unfinished = [], []
+    for story in parsed:
+        body = f"{story['situation']} {story['action']} {story['result']}"
+        (unfinished if _UNFILLED in body else stories).append(story)
+    if unfinished:
+        print(
+            f"  {len(unfinished)} story/stories still have {_UNFILLED}…]] to fill in "
+            f"and were not loaded: " + ", ".join(s["title"] for s in unfinished)
+        )
+    experiences = {
+        str(r["company"]).strip().lower(): int(r["id"])
+        for r in conn.execute("SELECT id, company FROM experiences")
+    }
+    projects = {
+        str(r["name"]).strip().lower(): int(r["id"])
+        for r in conn.execute("SELECT id, name FROM projects")
+    }
+    unattached: list[str] = []
     for story in stories:
+        experience_id, project_id = _resolve_role(
+            story.pop("role", ""), experiences, projects
+        )
+        if experience_id is None and project_id is None:
+            unattached.append(story["title"])
         conn.execute(
             """
-            INSERT INTO stories (title, situation, action, result, tags, created_at)
-            VALUES (:title, :situation, :action, :result, :tags, :created_at)
+            INSERT INTO stories (title, situation, action, result, tags,
+                                 experience_id, project_id, created_at)
+            VALUES (:title, :situation, :action, :result, :tags,
+                    :experience_id, :project_id, :created_at)
             ON CONFLICT (title) DO UPDATE SET
               situation = excluded.situation, action = excluded.action,
-              result = excluded.result, tags = COALESCE(excluded.tags, tags)
+              result = excluded.result, tags = COALESCE(excluded.tags, tags),
+              experience_id = excluded.experience_id,
+              project_id = excluded.project_id
             """,
-            {**story, "created_at": config.utcnow()},
+            {
+                **story,
+                "experience_id": experience_id,
+                "project_id": project_id,
+                "created_at": config.utcnow(),
+            },
+        )
+    if unattached:
+        print(
+            f"  {len(unattached)} story/stories have a **Role:** matching no experience "
+            f"or project and loaded unattached: " + ", ".join(unattached)
         )
     return len(stories)
 
