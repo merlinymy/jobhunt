@@ -72,13 +72,30 @@ def prompt_path(task: str) -> Path:
     return config.PROMPTS_DIR / f"{task}.md"
 
 
-def system_prompt(task: str) -> str:
+def system_prompt(task: str, conn: sqlite3.Connection | None = None) -> str:
     """`task`'s system prompt, read fresh.
 
     Deliberately not memoized. Prompt wording is what you iterate on, and a
     cached copy would mean restarting the dashboard between edits — one 4 KB
     read against a call that takes seconds is not a cost worth optimizing.
+
+    An active row in `prompts` wins over the file when a connection is given.
+    That is the dashboard editor; the file is the git-tracked default and what
+    every caller gets back the moment the override is reverted. Passing no
+    connection reads the file, which is what keeps the prompt loader usable from
+    places that have no database — `python -m jobhunt.llm` among them.
     """
+    if conn is not None:
+        try:
+            row = conn.execute(
+                "SELECT body FROM prompts WHERE task = ? AND active = 1", (task,)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Pre-012 database. The file is the answer, and it always was.
+            row = None
+        if row and str(row["body"]).strip():
+            return str(row["body"]).strip()
+
     path = prompt_path(task)
     if not path.exists():
         raise LLMError(
@@ -207,12 +224,22 @@ def complete(
     cached: str | None = None,
     application_id: int | None = None,
     expect_repeat: bool = True,
+    history: list[dict[str, str]] | None = None,
 ) -> str:
     """Run `task`'s model over `prompt` and return the text.
 
     `system` defaults to `config/prompts/<task>.md`. Pass it only to override
     that file for one call; workers should not, or the file stops being the
     place a prompt is edited.
+
+    `history` is prior turns — `[{"role": "user"|"assistant", "content": ...}]` —
+    placed before `prompt`, which is always the last user message. Everything is
+    still one `complete(task, prompt)` call; this is the difference between
+    continuing a conversation and describing one. The revision chat replays the
+    build's own exchange so the model sees the resume it wrote and the reasoning
+    it wrote it with, rather than a summary of both written by someone else. It
+    also makes the cache prefix longer, since those turns are byte-identical on
+    every subsequent turn.
 
     `cached` is the byte-identical prefix — the profile corpus — sent as a
     cache-control'd system block so repeat calls bill it at a tenth.
@@ -228,7 +255,7 @@ def complete(
     if not model:
         raise LLMError(f"task {task!r} has no `model` in {config.MODELS_YAML.name}")
     rate(model)  # fail before spending money, not after logging the spend as $0
-    system = system if system is not None else system_prompt(task)
+    system = system if system is not None else system_prompt(task, conn)
     sha = prompt_sha(system)
 
     try:
@@ -249,6 +276,17 @@ def complete(
     if system:
         blocks.append({"type": "text", "text": system})
 
+    turns: list[dict[str, Any]] = []
+    for turn in history or ():
+        role = turn.get("role")
+        content = str(turn.get("content") or "").strip()
+        # A malformed turn would be rejected by the API with a 400 that says
+        # nothing about which turn; drop it here instead. Alternation is not
+        # enforced — the API tolerates consecutive same-role turns by merging.
+        if role in ("user", "assistant") and content:
+            turns.append({"role": role, "content": content})
+    turns.append({"role": "user", "content": prompt})
+
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
     started = time.monotonic()
     try:
@@ -256,7 +294,7 @@ def complete(
             model=model,
             max_tokens=int(settings.get("max_tokens", 2000)),
             system=blocks or anthropic.NOT_GIVEN,
-            messages=[{"role": "user", "content": prompt}],
+            messages=turns,
         )
     except Exception as exc:
         _log(
