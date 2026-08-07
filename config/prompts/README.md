@@ -132,6 +132,42 @@ resume guide — the most credible of them for this role — returned 403 and wa
 this is revised again, start there. Where sources disagreed, the tiebreak was whichever advice
 survived contact with `validate_summary`.
 
+**The fifth revision reversed part of the fourth.** The instruction "give it one concrete
+result, taken from a line you actually kept" was wrong, and it was producing exactly the
+complaint that prompted the re-read: a summary that recites the page underneath it. The output
+was *"Shipped an AI post generator for a client with no marketing function whose LinkedIn
+engagement rose 200% in the first month"* — the same claim, the same figure, as the first
+bullet three lines below.
+
+What the second reading found, and this time on the narrower question of whether a summary
+should carry an achievement at all:
+
+- **It is a positioning statement, not an achievement statement.** The formula the SWE-specific
+  guidance gives is "[role or specialty] building [systems, products, or domain], with recent
+  work focused on [scope, ownership, or specialization]" — orientation, not evidence.
+- **It should make the experience section easier to interpret, not try to replace it.** So a
+  result already carried by a bullet must not appear again; the reader meets it twice and the
+  second time is the summary's fault.
+- **One or two sentences. A paragraph means it is doing too much.** The fourth revision's
+  output ran to 77 words; the fifth's runs to 56 and stops.
+- **No tool lists** — they dilute the positioning the summary exists to establish, and Skills
+  carries them already.
+- **If the bullets make the profile obvious, return nothing.** That space is better spent on
+  evidence. The empty-string option was always there and is now given a reason.
+
+Also fixed here, and worth separating from the above because it is a different failure: the
+vocabulary rule was scoped too widely. "Use the corpus's own words" exists so the model writes
+Claude rather than "an LLM" — a rule about *nouns* — but it was stated four times across the
+prompt without that scope, twice inside the summary paragraph. The model played safe by
+reciting, and produced *"ships production tools directly to the client or researcher who asked
+for them"*: the two literal stakeholders in the corpus, enumerated. It now says the corpus's
+words are required for what it *names*, and the sentence around those names is the model's to
+write.
+
+Worth knowing for the next revision: the checks cannot cause this. The dashboard builds with
+`strict=False` and no retry, so they annotate after the fact and never send wording back. A
+summary that reads defensively is always the prompt's doing, not the guard's.
+
 You can now edit all of this from `/prompts` in the dashboard, which writes a revision into
 the `prompts` table and takes effect on the next call. The file here stays the default and
 the way back. Because revisions are keyed by the same sha `llm_calls.system_sha` records, the
