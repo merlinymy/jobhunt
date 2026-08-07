@@ -363,6 +363,62 @@ def _resolve_role(
 _UNFILLED = "[[FILL:"
 
 
+# Section F of stories.md. `_STORY_HEADING` matches these too, but
+# `_parse_stories` drops anything with no situation/action/result, so they fall
+# through harmlessly and need their own pass.
+_PITCH_HEADING = "two-sentence pitch"
+
+# The key the pitch is stored under. FACT tier, not narrative: it is typed by
+# hand and returned verbatim, which is the whole reason that tier exists — the
+# same words every time, with no model in the path to vary them.
+PITCH_KEY = "pitch"
+
+
+def _parse_positioning(text: str) -> dict[str, str]:
+    """`### heading` -> body, for section F.
+
+    Section F is prose the writer fills in, and most of it is for a human. Only
+    the pitch is read by anything today; the rest is parsed anyway so adding a
+    consumer later needs no second parser.
+    """
+    out: dict[str, str] = {}
+    matches = list(_STORY_HEADING.finditer(text))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        body = text[match.end():end]
+        # Strip the story fields, so a story heading that reaches here contributes
+        # nothing rather than its situation text.
+        if _STORY_FIELD.search(body):
+            continue
+        # Whole comment blocks, not lines that happen to open one: a `<!--` on
+        # its own line leaves its continuation and its `-->` behind, and those
+        # then read as the answer.
+        cleaned = re.sub(r"<!--.*?-->", "", body, flags=re.S).strip().strip("-").strip()
+        if cleaned:
+            out[match.group(1).strip().lower()] = cleaned
+    return out
+
+
+def _load_pitch(conn: sqlite3.Connection, path: Path) -> int:
+    """The hand-written pitch, stored as a fact-tier answer.
+
+    This is what `stories.md`'s own header always claimed happened — "loads into
+    `stories` and into `answers` as global narrative defaults" — and never did.
+    `resume.build_document` had no source for a summary but the model, which is
+    why the summary was regenerated, and varied, on every build.
+    """
+    if not path.exists():
+        return 0
+    pitch = _parse_positioning(path.read_text()).get(_PITCH_HEADING, "")
+    # A heading with the template's own prompt text under it is not a pitch.
+    if not pitch or pitch.lower().startswith("###"):
+        return 0
+    from . import answers as bank
+
+    bank.put(conn, PITCH_KEY, "Two-sentence pitch", pitch, tier=bank.FACT, source="user")
+    return 1
+
+
 def _load_stories(conn: sqlite3.Connection, path: Path) -> int:
     if not path.exists():
         return 0
@@ -715,6 +771,7 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
 
         counts["answers"] = _load_fact_answers(conn, facts)
         counts["stories"] = _load_stories(conn, profile_dir / "stories.md")
+        counts["pitch"] = _load_pitch(conn, profile_dir / "stories.md")
 
         contact_rows = _contact_rows(profile_dir)
         if contact_rows:

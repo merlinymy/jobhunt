@@ -212,6 +212,25 @@ class TailorResult:
 # ================================== prompting ==================================
 
 
+def stored_pitch(conn: sqlite3.Connection) -> str:
+    """The hand-written summary, or "" if none is recorded.
+
+    A summary is a positioning statement — what kind of engineer this is — and
+    that does not change between two postings on the same afternoon. What changes
+    is the evidence, and ten tailored bullets already carry it. Regenerating the
+    positioning per posting bought variance and nothing else.
+
+    Loaded from stories.md section F as a fact-tier answer, which is the tier for
+    things typed by hand and returned verbatim. Overridable per application: a
+    chat revision that supplies its own summary is stored as given.
+    """
+    row = conn.execute(
+        "SELECT answer FROM answers WHERE question_key = ? AND company_id IS NULL",
+        ("pitch",),
+    ).fetchone()
+    return str(row["answer"]).strip() if row and row["answer"] else ""
+
+
 def stories_block(conn: sqlite3.Connection) -> str:
     """Behavioural stories, for prompts that answer essay questions.
 
@@ -270,6 +289,7 @@ def build_prompt(
     limit: int | None = None,
     gap_block: str = "",
     include_stories: bool = False,
+    have_summary: bool = False,
 ) -> tuple[str, str]:
     """Return `(corpus_block, prompt)`.
 
@@ -320,6 +340,11 @@ def build_prompt(
         # commentary on what was just read, and it must not read as part of the
         # posting's own text.
         + (f"{gap_block}\n\n" if gap_block else "")
+        + (
+            "A summary is already written and will be used as-is. Return an empty "
+            "string for `summary` and spend nothing on it.\n\n"
+            if have_summary else ""
+        )
         + "Select the bullets that best evidence fitness for this role"
         + (f", at most {limit}" if limit else "")
         + ". Return the JSON object described in your instructions."
@@ -1134,7 +1159,10 @@ def tailor(
     if not jd_text.strip():
         raise TailorError("no job description to tailor against")
     report: ProgressFn = on_progress or (lambda **_: None)
-    corpus, prompt = build_prompt(conn, jd_text, limit=limit, gap_block=gap_block)
+    pitch = stored_pitch(conn)
+    corpus, prompt = build_prompt(
+        conn, jd_text, limit=limit, gap_block=gap_block, have_summary=bool(pitch)
+    )
 
     # One retry, with the validator's own complaint handed back. A rejection is
     # usually a single word — a category term the source never used, a number
@@ -1160,6 +1188,12 @@ def tailor(
         emitted, reasoning, summary = parse_response(raw)
         bullets = validate(conn, emitted, findings=found)
         checked_summary = validate_summary(conn, summary, findings=found)
+        # The hand-written pitch wins. It is typed by hand and returned verbatim
+        # — fact-tier semantics — so it is not run through the checks, which
+        # exist to catch a model asserting something, not a person restating
+        # their own positioning.
+        if pitch:
+            checked_summary = pitch
         report(
             phase="checking",
             message=f"reading {len(bullets)} line{'' if len(bullets) == 1 else 's'} back against their source rows",
