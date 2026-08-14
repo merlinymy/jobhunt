@@ -22,6 +22,7 @@ Read on demand, not every session:
 
 - `docs/architecture.md` — state machine, components, algorithms, packet design
 - `docs/build-plan.md` — phases, gates, current status (check boxes off as work completes)
+- `docs/resume-redesign.md` — resume-generation redesign: pipeline, schema, honesty-gate contract
 - `docs/deploy-mini.md` — bringing the host up, in order, with what each step proves
 - `migrations/` — schema, source of truth
 - `config/models.yaml` — which model runs which task, and why
