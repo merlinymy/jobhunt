@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode
 
-from .. import answers, config, prefilter, queries, runs, states
+from .. import answers, config, packet_chat, prefilter, queries, runs, states
 
 # ---------------------------------------------------------------- pipeline ---
 
@@ -224,29 +224,37 @@ def packet_view(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]
     # The diff is rebuilt from `resume_data` — the exact document that produced
     # the stored bytes — rather than re-tailoring. Re-running the model would
     # show a diff against a resume that was never downloaded.
+    #
+    # Lines are matched back to their source rows by `packet_chat.current_resume`,
+    # recovers the ids from the tailor's own reply in `llm_calls`. This used to
+    # match on the text instead, and that cannot work by construction: rewording
+    # is the tailor's whole job, so a reworded line never equals its source
+    # sentence. Every one of them fell through to `before = "(reworded — see the
+    # PDF)"` — so the diff `.claude/rules/tailoring.md` requires *before* the
+    # resume is used showed the before side of nothing that had changed, which is
+    # the only case it exists for. `changed` is now a comparison rather than a
+    # confession that the lookup failed.
     diff: list[dict[str, Any]] = []
     pdf_meta = None
     if row["resume_data"]:
-        try:
-            document = json.loads(row["resume_data"])
-        except json.JSONDecodeError:
-            document = {}
-        selected: list[str] = []
-        for entries in (document.get("cv", {}).get("sections", {}) or {}).values():
-            for entry in entries:
-                if isinstance(entry, dict):
-                    selected.extend(entry.get("highlights", []) or [])
-        sources = {b["text"]: b for b in queries.corpus_bullets(conn)}
-        for text in selected:
-            source = sources.get(text)
+        lines = packet_chat.current_resume(conn, application_id)
+        sources = queries.bullets_by_id(
+            conn, [int(line["id"]) for line in lines if line["id"] is not None]
+        )
+        for line in lines:
+            source = sources.get(line["id"]) if line["id"] is not None else None
+            before = str(source["text"]) if source is not None else ""
             diff.append({
-                "bullet_id": int(source["id"]) if source else None,
-                "before": source["text"] if source else "(reworded — see the PDF)",
-                "after": text,
-                "changed": source is None,
+                "bullet_id": line["id"],
+                # Still honest when a line cannot be traced — a packet built
+                # before `llm_calls` kept the reply, or one whose rows were
+                # pruned. That is now the rare case rather than every line.
+                "before": before or "(source row not recoverable)",
+                "after": line["text"],
+                "changed": not before or before.strip() != line["text"].strip(),
             })
         pdf_meta = {
-            "bullets": len(selected),
+            "bullets": len(lines),
             "reworded": sum(1 for d in diff if d["changed"]),
         }
 

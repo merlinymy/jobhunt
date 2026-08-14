@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
 
 from . import config, llm
 from .db import transaction
@@ -118,12 +117,18 @@ def put(
     tier: str,
     source: str,
     company_id: int | None = None,
-) -> None:
-    """Upsert one answer. The unique indexes decide global vs per-company.
+) -> int:
+    """Upsert one answer and return its row id. The unique indexes decide scope.
 
     001 has `UNIQUE (question_key, company_id)` and 003 added the partial index
     for the `company_id IS NULL` case, which SQLite would otherwise treat as
     never conflicting. Both are needed; the conflict targets below match them.
+
+    The id is returned rather than discarded because `unknown_questions
+    .resolved_by` is a foreign key to it — that column has existed since 001 and
+    has never been written, for want of this. `lastrowid` is not it: on the
+    UPDATE half of an upsert it reports the row that would have been inserted,
+    so the id is read back by key instead.
     """
     conflict = "(question_key)" if company_id is None else "(question_key, company_id)"
     where = "WHERE company_id IS NULL" if company_id is None else ""
@@ -141,11 +146,25 @@ def put(
             """,
             (key, text, tier, company_id, answer, source, config.utcnow()),
         )
+        # `company_id IS ?` rather than `= ?`: a global answer has NULL there,
+        # and `= NULL` matches nothing.
+        row = conn.execute(
+            "SELECT id FROM answers WHERE question_key = ? AND company_id IS ?",
+            (key, company_id),
+        ).fetchone()
+    return int(row["id"])
 
 
-def _lookup(
+def lookup(
     conn: sqlite3.Connection, key: str, company_id: int | None
 ) -> sqlite3.Row | None:
+    """The answer in force for `key` at this employer: company override, then global.
+
+    Public because it is the resolution rule, and three modules outside this one
+    need to apply it — the packet page, the form router, and the gap-filling
+    walk. It was private, so `formfill` grew its own hand-written query instead
+    and got the scope wrong for per-company facts.
+    """
     if company_id is not None:
         row = conn.execute(
             "SELECT * FROM answers WHERE question_key = ? AND company_id = ?",
@@ -268,7 +287,7 @@ def resolve_all(
     """
     out = []
     for question in QUESTIONS:
-        row = _lookup(conn, question.key, company_id)
+        row = lookup(conn, question.key, company_id)
         if row is None:
             out.append(Resolved(question, None, None, "missing",
                                 generatable=question.tier == NARRATIVE))
@@ -280,6 +299,51 @@ def resolve_all(
             scope="company" if row["company_id"] is not None else "global",
         ))
     return out
+
+
+def open_unknowns(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Unanswered questions, most-seen first. The queue `make chat` walks.
+
+    `seen_count` is the ordering because it is the whole signal: a question asked
+    once is noise and one asked six times is the next thing that belongs in
+    facts.yaml. Already-resolved rows are excluded rather than deleted — the
+    count of how often a gap was hit before it was closed is worth keeping.
+    """
+    return conn.execute(
+        """
+        SELECT u.id, u.question_text, u.seen_count, u.created_at,
+               u.application_id,
+               j.title, c.name AS company
+          FROM unknown_questions u
+          LEFT JOIN applications a ON a.id = u.application_id
+          LEFT JOIN jobs j         ON j.id = a.job_id
+          LEFT JOIN companies c    ON c.id = j.company_id
+         WHERE u.resolved_by IS NULL
+         ORDER BY u.seen_count DESC, u.id
+        """
+    ).fetchall()
+
+
+def mark_resolved(conn: sqlite3.Connection, unknown_id: int, answer_id: int) -> None:
+    """Point an unknown question at the answer that closed it."""
+    with transaction(conn):
+        conn.execute(
+            "UPDATE unknown_questions SET resolved_by = ? WHERE id = ?",
+            (answer_id, unknown_id),
+        )
+
+
+def catalogued(question_text: str) -> Question | None:
+    """The catalogue entry a recorded unknown came from, if any.
+
+    `flag_unknowns` records `question.text` verbatim, so the round trip is an
+    exact match rather than a guess. A question that matches nothing here came
+    in some other way and has no home in facts.yaml.
+    """
+    for question in QUESTIONS:
+        if question.text == question_text:
+            return question
+    return None
 
 
 def flag_unknowns(

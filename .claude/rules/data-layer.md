@@ -14,6 +14,12 @@ a schema constraint, choose the constraint.
 ## Migrations
 
 - Numbered `.sql` files applied in order. Never edit one that has already run — add the next.
+- **One file per number.** They apply in `sorted()` order, which is by filename, so two files
+  sharing a number run in alphabetical order of what follows it — an order nobody chose.
+  `010_resume_findings.sql` and `010_runs.sql` are exactly that. They are independent, so it
+  happens not to matter, and they cannot be renamed now because a migration is immutable once
+  applied. `migrate.check_numbering` refuses any *pending* file whose number is already spent,
+  so the next one cannot repeat it. If it fires, renumber the new file.
 - `PRAGMA foreign_keys = ON` on every connection, not just at creation. SQLite defaults it off
   per-connection and silently ignores FK violations otherwise.
 - WAL mode. Set once, verify on startup.

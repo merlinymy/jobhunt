@@ -119,10 +119,6 @@ export interface Decision {
   title: string;
   outcome: "approved" | "skipped";
   siblings_closed: number;
-  /** Approving starts the packet it was approved for. "started" if this click
-   *  did, "queued" if a build was already running and will pick the row up,
-   *  otherwise the reason. Absent on a skip. */
-  packet?: string;
 }
 
 export interface EventRow {
@@ -132,7 +128,10 @@ export interface EventRow {
   from_state: string | null;
   to_state: string | null;
   detail: string | null;
-  created_at: string;
+  email_msg_id: string | null;
+  /** The column is `occurred_at`. This said `created_at`, which `events` has
+   *  never had — so every date in the history list rendered as an em-dash. */
+  occurred_at: string;
 }
 
 export interface Contact {

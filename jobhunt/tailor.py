@@ -24,7 +24,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import config, llm, queries, states
+from . import config, llm, queries, runs, states
 from .db import transaction
 from .runs import ProgressFn
 
@@ -464,17 +464,12 @@ _CLAUSE_START = re.compile(r"(?<=[.!?:;])\s+")
 # below. They were regex guessing at word class — is `Stopped` a verb or a
 # company — and that is the one thing in this file a model does better than a
 # pattern. Every false rejection this validator has produced came from them.
-# `_stem` survives; the diff still uses it.
-
-
-def _stem(word: str) -> str:
-    """Crude suffix strip, enough to match inflections of the same source verb."""
-    lowered = word.lower()
-    for suffix in _INFLECTIONS:
-        if lowered.endswith(suffix) and len(lowered) - len(suffix) >= 3:
-            return lowered[: -len(suffix)]
-    return lowered
-
+#
+# `_stem` went with them. The note here used to claim "the diff still uses it",
+# and it did not: `diff()` reads `TailoredBullet.changed`, which is a string
+# comparison made in `validate`. What was left was an unreachable function whose
+# body referenced `_INFLECTIONS`, deleted alongside the checks that defined it —
+# so calling it raised NameError rather than doing anything crude but harmless.
 
 _TECH_COLUMNS = ("tech_built", "tech_owned", "tech_maintained", "tech_touched")
 
@@ -719,24 +714,25 @@ def _corpus_haystack(conn: sqlite3.Connection) -> str:
         # validation", "connection pooling", "provider abstraction". A summary may
         # name any of it, so leaving it out here would reject correct summaries.
         parts.extend(_json_names(row, ("skills",)))
+    # Each parent table read once. `experiences` and `projects` were each walked
+    # twice — once for their text columns and again for tech and context — which
+    # is the same rows, the same coverage, and two extra queries per call.
     for row in queries.corpus_experiences(conn):
         for column in ("company", "title", "scope", "company_context"):
             if column in row.keys() and row[column]:
                 parts.append(str(row[column]))
+        parts.extend(_tech_names(row))
+        parts.append(_parent_context(row))
     for row in queries.corpus_projects(conn):
         for column in ("name", "role", "blurb"):
             if column in row.keys() and row[column]:
                 parts.append(str(row[column]))
+        parts.extend(_tech_names(row))
+        parts.append(_parent_context(row))
     for row in queries.corpus_education(conn):
         for column in ("school", "degree", "field"):
             if column in row.keys() and row[column]:
                 parts.append(str(row[column]))
-    for row in queries.corpus_experiences(conn):
-        parts.extend(_tech_names(row))
-        parts.append(_parent_context(row))
-    for row in queries.corpus_projects(conn):
-        parts.extend(_tech_names(row))
-        parts.append(_parent_context(row))
     return " ".join(parts)
 
 
@@ -807,6 +803,32 @@ def validate_summary(
     # Names, seniority and scope in the summary go to `review_summary()`; this
     # function keeps only what is arithmetic.
     return text
+
+
+def corpus_numbers(conn: sqlite3.Connection) -> set[str]:
+    """Every figure the corpus states, digits and spelled-out words alike.
+
+    Built from bullet text and metrics, which is where a number someone could
+    quote actually lives — not from `_corpus_haystack`, which folds in parent
+    context a bullet's own row does not assert.
+
+    Public because the resume is not the only thing that can invent a number.
+    `gaps.say` goes to an interviewer and a drafted form answer goes in a box a
+    person reads, and a figure made up in either is the same fabrication the
+    validator exists to catch, arriving through a door that had none on it. Both
+    check against this, so the three cannot drift apart — and both compute it
+    once per batch rather than once per sentence, which is what they were doing.
+    """
+    hay = " ".join(
+        f"{row['text']} {row['metric'] or ''}" for row in queries.corpus_bullets(conn)
+    )
+    return set(_numbers(hay)) | _spelled_numbers(hay)
+
+
+def unsourced_numbers(text: str, allowed: set[str]) -> list[str]:
+    """Figures in `text` that `allowed` does not contain. Sorted, empty is normal."""
+    written = set(_numbers(text, standalone_only=True)) | _spelled_numbers(text)
+    return sorted(n for n in written if n not in allowed)
 
 
 def _noun_context(conn: sqlite3.Connection) -> dict[int, str]:
@@ -1131,6 +1153,32 @@ def review_summary(
 # =================================== driving ===================================
 
 
+def _summary_for(
+    conn: sqlite3.Connection,
+    written: str,
+    pitch: str,
+    *,
+    findings: list[Finding] | None = None,
+) -> tuple[str, bool]:
+    """`(summary to use, whether it still needs the model check)`.
+
+    One place, because the two callers below got this wrong in opposite
+    directions. The strict path never substituted the pitch at all — it passed
+    `have_summary=True` to the prompt, which tells the model to return an empty
+    string and spend nothing, and then used that empty string. `make tailor`
+    rendered every resume with no summary while the dashboard rendered the pitch.
+
+    The lenient path substituted it and then sent it to `review_summary` anyway,
+    one line under a comment saying it was not checked. The pitch is fact-tier —
+    typed by hand, returned verbatim — so checking it bills a `tailor_check` call
+    per build to read words no model wrote, and any phrasing the corpus supports
+    only obliquely comes back flagged on every build for as long as it stands.
+    """
+    if pitch:
+        return pitch, False
+    return validate_summary(conn, written, findings=findings), True
+
+
 def tailor(
     conn: sqlite3.Connection,
     jd_text: str,
@@ -1187,13 +1235,8 @@ def tailor(
         )
         emitted, reasoning, summary = parse_response(raw)
         bullets = validate(conn, emitted, findings=found)
-        checked_summary = validate_summary(conn, summary, findings=found)
-        # The hand-written pitch wins. It is typed by hand and returned verbatim
-        # — fact-tier semantics — so it is not run through the checks, which
-        # exist to catch a model asserting something, not a person restating
-        # their own positioning.
-        if pitch:
-            checked_summary = pitch
+        # The hand-written pitch wins, and is not checked. See `_summary_for`.
+        checked_summary, check_summary = _summary_for(conn, summary, pitch, findings=found)
         report(
             phase="checking",
             message=f"reading {len(bullets)} line{'' if len(bullets) == 1 else 's'} back against their source rows",
@@ -1202,9 +1245,10 @@ def tailor(
         # that plainly rather than letting a network blip read as a clean bill.
         try:
             review(conn, bullets, application_id=application_id, findings=found)
-            review_summary(
-                conn, checked_summary, application_id=application_id, findings=found
-            )
+            if check_summary:
+                review_summary(
+                    conn, checked_summary, application_id=application_id, findings=found
+                )
         except ReviewUnavailable as exc:
             found.append(
                 Finding(
@@ -1237,9 +1281,10 @@ def tailor(
             # a set of lines that already invents a number is not worth paying
             # a second model to read.
             bullets = validate(conn, emitted)
-            checked_summary = validate_summary(conn, summary)
+            checked_summary, check_summary = _summary_for(conn, summary, pitch)
             review(conn, bullets, application_id=application_id)
-            review_summary(conn, checked_summary, application_id=application_id)
+            if check_summary:
+                review_summary(conn, checked_summary, application_id=application_id)
             return TailorResult(
                 bullets=bullets, reasoning=reasoning, summary=checked_summary
             )
@@ -1498,6 +1543,23 @@ def apply_selection(
         raise LookupError(f"no application {application_id}")
     jd = (row["jd_text"] or "").strip()
 
+    # The same wall `build_packet` puts up, and for the same reason: past
+    # `applied`, `resume_pdf` is the record of what an employer received and
+    # nothing may overwrite it. It was missing here, so the chat's Apply button
+    # reached `_store` on a submitted row — where the write was only undone
+    # because `states.transition` rejects `applied -> packet_ready` and rolls the
+    # transaction back. Correct by accident, after two paid model calls, and
+    # reported as "illegal transition", which describes none of it.
+    state = conn.execute(
+        "SELECT state FROM applications WHERE id = ?", (application_id,)
+    ).fetchone()["state"]
+    if state in states.SUBMITTED_STATES:
+        raise TailorError(
+            f"application {application_id} is {state!r} — it has been submitted, and "
+            f"the stored resume is the record of what the employer received. A "
+            f"revision cannot replace it with something never sent."
+        )
+
     found: list[Finding] = []
     bullets = validate(conn, emitted, findings=found)
     checked = validate_summary(conn, summary, findings=found)
@@ -1515,9 +1577,6 @@ def apply_selection(
             )
         )
     result = TailorResult(bullets=bullets, summary=checked, findings=found)
-    state = conn.execute(
-        "SELECT state FROM applications WHERE id = ?", (application_id,)
-    ).fetchone()["state"]
     return _store(
         conn,
         application_id,
@@ -1615,7 +1674,15 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         help="path to a file holding the job description, or - for stdin",
     )
-    parser.add_argument("--limit", type=int, default=10)
+    # One flag, two meanings, decided by whether a JD was given: bullets on the
+    # resume for a single posting, packets for the queue. `default=None` rather
+    # than 10, because the queue path used to read `args.limit != 10` as "the
+    # user asked for a limit" — so `--limit 10` meant no limit at all, and the
+    # only way to build exactly ten packets was to not say so.
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="with a JD: bullets to select (default 10). Without: packets to build.",
+    )
     parser.add_argument("--pdf", default=None, help="also render a PDF here")
     parser.add_argument(
         "--metrics", action="store_true",
@@ -1644,7 +1711,29 @@ def main(argv: list[str] | None = None) -> int:
     if not args.jd:
         conn = connect()
         try:
-            counts = build_pending(conn, args.limit if args.limit != 10 else None)
+            # The same `packet` lock the dashboard's Build button takes, and for
+            # the same reason. This was the one packet writer that ran without
+            # it: `make tailor` in a terminal and a build started from the page
+            # would each render the same application, race on `resume_pdf`, and
+            # bill twice for one resume. `packet_ready` is rebuildable so nothing
+            # was lost, but that is the accident the lock exists to prevent.
+            #
+            # Taken here rather than inside `build_pending`, matching `ingest`
+            # and `score`: the entry point claims, the worker only reports. The
+            # dashboard needs that split, because `runner` claims in the request
+            # thread and then runs under `attached` in another.
+            #
+            # Passing the reporter also puts a terminal drain on the dashboard
+            # and in `make doctor`, instead of it being invisible work that made
+            # the button refuse for no stated reason.
+            with runs.track(conn, "packet") as report:
+                counts = build_pending(conn, args.limit, on_progress=report)
+        except runs.AlreadyRunning as exc:
+            # 3, as ingest and score use: "something else got there first" is
+            # not a failed run, and deploy/discover.sh reads a non-zero exit as
+            # a bad morning.
+            print(f"packets not built: {exc}", file=sys.stderr)
+            return 3
         finally:
             conn.close()
         if not counts["pending"]:
@@ -1657,7 +1746,7 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = connect()
     try:
-        result = tailor(conn, jd_text, limit=args.limit)
+        result = tailor(conn, jd_text, limit=args.limit or 10)
     except FabricationError as exc:
         print(f"REJECTED — nothing was rendered.\n{exc}", file=sys.stderr)
         return 2

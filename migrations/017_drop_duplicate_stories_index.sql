@@ -1,0 +1,23 @@
+-- One index on `stories(experience_id)`, not two.
+--
+-- 008 added `idx_stories_experience` as a partial index — `WHERE experience_id
+-- IS NOT NULL` — at a point when `stories.experience_id` was the only link a
+-- story had. 016 then added the `project_id` half and, not noticing, created
+-- `stories_experience` over the same column as a plain index. Both have been
+-- maintained on every write since, and no query has ever used either: the only
+-- read this table gets is `corpus_stories`, which is `ORDER BY id` over the
+-- whole thing.
+--
+-- The partial one goes and the 016 pair stays, which is the opposite of the
+-- efficiency argument and the right answer anyway. A partial index is smaller —
+-- of nine stories, eight are attached to projects, so it would cover one row —
+-- but at nine rows that is not a measurable saving, and `stories_experience` /
+-- `stories_project` are a matched pair with matched names that read as one
+-- decision. `IS NULL` is also answerable from the full index, and "which stories
+-- are attached to nothing" is a question worth being able to ask; the partial
+-- index cannot answer it.
+--
+-- Dropping an index never loses data. If the partial one turns out to be wanted,
+-- 008 is the reference for what it was.
+
+DROP INDEX idx_stories_experience;

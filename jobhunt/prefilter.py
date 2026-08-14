@@ -24,7 +24,6 @@ that has gone quiet can be traced to the rule that did it rather than guessed at
 
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -248,8 +247,15 @@ _BAY_AREA = re.compile(
     r"south\s+san\s+francisco|emeryville|bay\s+area|silicon\s+valley)\b", re.I)
 _CALIFORNIA = re.compile(r"(?:\bcalifornia\b|,\s*ca\b|\bca\s+\d{5})", re.I)
 _METRO_PATTERNS: dict[str, re.Pattern[str]] = {
-    "boston": re.compile(r"\b(?:boston|cambridge|somerville|waltham|burlington)\b.*|"
-                         r"\bma\b", re.I),
+    # The state abbreviation is anchored on the comma that precedes it, as in
+    # every other metro below. It was a bare `\bma\b`, which matches a standalone
+    # "ma" anywhere in a location string — and `'` is not a word character, so
+    # "Ma'anshan" read as Boston. Location only ranks and never rejects, so the
+    # cost was a mis-ordered review queue rather than a lost posting, but a rule
+    # that fires on the wrong continent is not ranking anything. The trailing
+    # `.*` went with it: `search` already scans, so it matched nothing extra.
+    "boston": re.compile(r"\b(?:boston|cambridge|somerville|waltham|burlington)\b|"
+                         r",\s*ma\b", re.I),
     "chicago": re.compile(r"\b(?:chicago|evanston|schaumburg)\b|,\s*il\b", re.I),
     "atlanta": re.compile(r"\batlanta\b|,\s*ga\b", re.I),
     "seattle": re.compile(r"\b(?:seattle|bellevue|redmond|kirkland|tacoma)\b|,\s*wa\b", re.I),
@@ -340,5 +346,82 @@ def run(
             )
         counts["filtered"] += 1
         by_rule[verdict.rule or "?"] = by_rule.get(verdict.rule or "?", 0) + 1
+    counts.update({f"rule:{name}": n for name, n in sorted(by_rule.items())})
+    return counts
+
+
+def recheck(
+    conn: sqlite3.Connection,
+    *,
+    dry_run: bool = False,
+    limit: int | None = None,
+    on_progress: ProgressFn | None = None,
+) -> dict[str, int]:
+    """Re-apply the current rules to rows already `scored`. Returns counts by outcome.
+
+    Editing `scoring.yaml` is what makes the review queue stale. `run()` only ever
+    walks `discovered`, so a narrowed rule changes what arrives tomorrow and does
+    nothing about the queue in front of you — narrowing the seniority band left
+    1,652 of 4,161 cards asking about roles the rules had just refused, with no
+    way to retire them but by hand, one at a time.
+
+    Every rule is re-applied, not only the one that changed, because the question
+    this answers is "does this posting still pass?" and there is only one honest
+    way to ask it. That means a recheck can also drop rows on a rule that was
+    already there — a JD-reading rule that could not fire when the posting was
+    scored without a description, say. `dry_run` exists so that is visible as a
+    breakdown before anything moves, and the counts name the rule either way.
+
+    `filtered`, not `skipped`. Nobody read these; a rule rejected them, and the
+    stats page counts the two differently.
+
+    Deliberately not automatic. Re-running the rules over work already paid for
+    is a decision about a queue, and `filtered` is terminal.
+    """
+    cfg = load()
+    counts = {"examined": 0, "passed": 0, "filtered": 0}
+    by_rule: dict[str, int] = {}
+
+    sql = """
+        SELECT a.id AS application_id, j.title, j.jd_text, j.location, j.remote,
+               c.name AS company
+          FROM applications a
+          JOIN jobs j      ON j.id = a.job_id
+          JOIN companies c ON c.id = j.company_id
+         WHERE a.state = ?
+         ORDER BY a.id
+    """
+    fetched = conn.execute(
+        sql + (f" LIMIT {int(limit)}" if limit else ""), (states.SCORED,)
+    ).fetchall()
+
+    for index, row in enumerate(fetched):
+        if on_progress and index % 25 == 0:
+            on_progress(
+                phase="prefilter", done=index, total=len(fetched),
+                counts={k: v for k, v in counts.items() if v},
+            )
+        counts["examined"] += 1
+        verdict = evaluate(row, cfg, row["company"])
+        if verdict.passed:
+            counts["passed"] += 1
+            continue
+        counts["filtered"] += 1
+        by_rule[verdict.rule or "?"] = by_rule.get(verdict.rule or "?", 0) + 1
+        if dry_run:
+            continue
+        # Per row, as in `run()`: a pass over thousands that dies partway keeps
+        # the decisions already made, and they are deterministic, so a rerun
+        # reaches the same verdict for whatever is left.
+        with transaction(conn):
+            states.transition(
+                conn,
+                int(row["application_id"]),
+                states.FILTERED,
+                # Says it was a rules change rather than a first-pass rejection,
+                # so the history does not read as though this was filtered at
+                # discovery under rules that did not exist then.
+                detail=f"recheck after a rules change — {verdict.as_event()}",
+            )
     counts.update({f"rule:{name}": n for name, n in sorted(by_rule.items())})
     return counts

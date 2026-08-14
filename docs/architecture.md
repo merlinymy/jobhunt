@@ -14,9 +14,11 @@ state each branch hangs off, and got two of them wrong.
 | — | `applied` | manual entry of an application I already submitted by hand. It never passed through discovery, so it seeds one honest event rather than a fabricated history |
 | `discovered` | `filtered` | deterministic prefilter rejects it — **terminal** |
 | `discovered` | `scored` | prefilter passes, LLM assigns score + reasoning |
+| `scored` | `filtered` | `make score ARGS=--recheck` re-applies the deterministic rules after `scoring.yaml` changed, and this row no longer passes — **terminal**. Distinct from `skipped`: a rule rejected it, nobody read it |
 | `scored` | `skipped` | I decline it on `/review` — **terminal** |
 | `scored` | `job_approved` | I approve it on `/review` |
 | `job_approved` | `expired` | posting gone before the packet was built — **terminal** |
+| `job_approved` | `skipped` | it is a duplicate listing of a role decided on another row, closed by `actions.decide` — **terminal** |
 | `job_approved` | `packet_ready` | `tailor` renders the resume and resolves answers |
 | `packet_ready` | `expired` | posting gone before I submitted — **terminal** |
 | `packet_ready` | `applied` | I tap "I applied", or a confirmation email arrives |
@@ -53,7 +55,8 @@ helper should reject any pair not in the table above rather than trusting caller
 | `inbox` | launchd, hourly | Gmail API → classify → write events, close forgotten `applied` |
 | `dashboard` | always on | JSON API plus the React SPA: review queue, packet, fill, stats |
 | `load-profile` | on demand | import `docs/profile/*` into SQLite; idempotent upsert |
-| `chat` | on demand | gap-filling only — resolves `unknown_questions`, appends to `answers` |
+| `chat` | on demand | gap-filling only — resolves `unknown_questions`, appends to `answers`. Never writes a fact that `facts.yaml` has a home for; it names the key to fill, because the DB is derived from that file |
+| `packet_chat` | dashboard | revising one built resume in conversation. Not a worker — no CLI, no launchd |
 
 Only the Mac mini runs these. See Deployment below.
 

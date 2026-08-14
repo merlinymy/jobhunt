@@ -38,10 +38,31 @@ TRANSITIONS: frozenset[tuple[str | None, str]] = frozenset(
         (None, APPLIED),  # manual entry / Phase 0 backfill
         (DISCOVERED, FILTERED),
         (DISCOVERED, SCORED),
+        # Re-applying the deterministic rules to a row that was scored under an
+        # older `scoring.yaml`. Editing the rules is what makes a queue stale:
+        # narrowing the seniority band left 1,652 of 4,161 review cards asking
+        # about roles the rules now refuse, and nothing existed to retire them.
+        #
+        # `filtered` rather than `skipped`, and the distinction is the honest
+        # one: `skipped` means a human read it and declined, and the stats page
+        # reads the two differently. A rule rejected these; nobody looked.
+        # See `prefilter.recheck`.
+        (SCORED, FILTERED),
         (SCORED, SKIPPED),
         (SCORED, JOB_APPROVED),
         (JOB_APPROVED, EXPIRED),
         (JOB_APPROVED, PACKET_READY),
+        # Retiring a duplicate listing that was approved before its twin was.
+        # `queries.sibling_application_ids` has selected `job_approved` rows for
+        # exactly this since the review queue started collapsing duplicates, and
+        # `actions.decide` has been handing them to `transition` ever since —
+        # where every one raised, was swallowed by `except InvalidTransition:
+        # continue`, and left the sibling open. The widening did nothing.
+        #
+        # Not the same as `expired`, which is the other way out of this state:
+        # that says the posting closed, and saying so about a posting that is
+        # still up puts a false fact in the record. This one is a decision.
+        (JOB_APPROVED, SKIPPED),
         (PACKET_READY, EXPIRED),
         (PACKET_READY, APPLIED),
         (APPLIED, REJECTED),

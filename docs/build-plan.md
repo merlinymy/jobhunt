@@ -125,8 +125,14 @@ Fixture count is 55, up from 48; all 102 corpus bullets still validate verbatim.
       chain; `make load-profile` writes the global facts from `facts.yaml`.
 - [~] `stories.md` loader written and idempotent (008 gives `stories` a natural key).
       **The file is still the empty template** — nothing to load until it is filled.
-- [ ] `chat` worker: walks intake sections, writes to DB, appends new answers.
-      The one Phase 3 item left. `unknown_questions.seen_count` is what it would walk.
+- [x] `chat` worker: walks `unknown_questions` by `seen_count`, closes what has since
+      been answered, and routes the rest by where the answer actually belongs — a
+      `facts_path` question names the dotted key to add to facts.yaml rather than
+      writing a DB row that the next `make load-profile` would disagree with, a
+      per-company one points at the packet, and only a question with no file
+      representation is typed in and stored. `--list` reports without asking.
+      This is also what finally writes `unknown_questions.resolved_by`, a foreign
+      key that had existed since 001 and never been populated.
 - [x] Answer resolution chain: company override → global → generate if narrative →
       otherwise record in `unknown_questions`. A fact is never generated, enforced in
       `answers.generate` and again at the route.

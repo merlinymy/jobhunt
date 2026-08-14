@@ -80,5 +80,5 @@ test-live: $(PY)  ## score the model checker against the adversarial fixtures (c
 inbox: $(PY)  ## poll Gmail, classify, update states
 	$(PY) -m jobhunt.inbox
 
-chat: $(PY)  ## gap-filling: resolve unknown_questions, append answers
-	$(PY) -m jobhunt.chat
+chat: $(PY)  ## gap-filling: resolve unknown_questions, append answers (ARGS=--list)
+	$(PY) -m jobhunt.chat $(ARGS)

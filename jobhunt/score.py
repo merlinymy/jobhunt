@@ -392,17 +392,34 @@ def apply_batch(
         # progress write has to stay: it has nothing to be atomic with.
         report(done=index, counts=tally(counts))
         application_id = int(str(entry.custom_id).removeprefix("app-"))
+        prompt = prompts.get(str(entry.custom_id), "")
+        # A failed request is still a call, and CLAUDE.md asks for every call in
+        # `llm_calls`. These wrote nothing, so the two ways scoring silently
+        # costs money — a request the API refused, and a reply that came back
+        # unparseable — were invisible: `llm_spend.failed` read 0 for every batch
+        # ever run, and the tokens billed for an unusable reply appeared nowhere.
+        # A `--batch-id` re-apply will re-log a still-failing entry; that is the
+        # cheaper error than never recording it at all.
         if entry.result.type != "succeeded":
             counts["failed"] += 1
+            _log_batch_call(
+                conn, model, application_id, None, prompt, system_sha,
+                error=f"batch request {entry.result.type}",
+            )
             continue
         message = entry.result.message
         text = "".join(part.text for part in message.content if part.type == "text")
         try:
             score, reason = parse_score(text)
-        except ScoreError:
+        except ScoreError as exc:
             # One unparseable reply is not a reason to lose the run. The row
-            # stays `discovered` and gets another go next time.
+            # stays `discovered` and gets another go next time — but this one was
+            # billed, so its tokens and its cost are recorded before moving on.
             counts["failed"] += 1
+            _log_batch_call(
+                conn, model, application_id, message, prompt, system_sha,
+                error=f"{type(exc).__name__}: {exc}",
+            )
             continue
         try:
             apply_score(conn, Scored(application_id, score, reason))
@@ -412,29 +429,38 @@ def apply_batch(
             counts["already"] += 1
             continue
         counts["scored"] += 1
-        _log_batch_call(conn, model, application_id, message,
-                        prompts.get(str(entry.custom_id), ""), system_sha)
+        _log_batch_call(conn, model, application_id, message, prompt, system_sha)
     return counts
 
 
 def _log_batch_call(
     conn: sqlite3.Connection, model: str, application_id: int, message: Any,
-    prompt: str = "", system_sha: str | None = None,
+    prompt: str = "", system_sha: str | None = None, error: str | None = None,
 ) -> None:
     """`llm_calls` row per batch result. CLAUDE.md wants every call logged.
 
     Cost is halved: the Batch API bills at 50%, and reconstructing it from the
     token counts is the only way `llm_calls.cost_usd` stays true — the API
     still does not return a price.
+
+    `message` is None for a request the API never completed: there is no usage
+    to record and no reply to store, but there is a row, because "this posting
+    was submitted and nothing came back" is exactly what the table is for.
+    `error` carries which of the two failures it was.
     """
     usage = getattr(message, "usage", None)
+    response = (
+        "".join(p.text for p in message.content if p.type == "text")[:2000]
+        if message is not None
+        else None
+    )
     with transaction(conn):
         conn.execute(
             """
             INSERT INTO llm_calls (task, model, application_id, prompt, response,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                 cost_usd, latency_ms, error, stop_reason, system_sha, called_at)
-            VALUES ('score', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+            VALUES ('score', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
             """,
             (
                 model,
@@ -443,7 +469,7 @@ def _log_batch_call(
                 # and the prompts are no longer in memory — honest about what is
                 # known rather than a crash or a fabricated reconstruction.
                 prompt,
-                "".join(p.text for p in message.content if p.type == "text")[:2000],
+                response,
                 (getattr(usage, "input_tokens", 0) or 0)
                 + (getattr(usage, "cache_read_input_tokens", 0) or 0)
                 + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
@@ -453,6 +479,7 @@ def _log_batch_call(
                 getattr(usage, "cache_read_input_tokens", None) if usage else None,
                 getattr(usage, "cache_creation_input_tokens", None) if usage else None,
                 llm._cost(model, usage) * 0.5 if usage else None,
+                error,
                 getattr(message, "stop_reason", None),
                 system_sha,
                 config.utcnow(),
@@ -560,6 +587,15 @@ def main(argv: list[str] | None = None) -> int:
         "--prefilter-only", action="store_true",
         help="run pass 1 and stop — deterministic, free, and the usual thing to check first",
     )
+    parser.add_argument(
+        "--recheck", action="store_true",
+        help="re-apply the rules to rows already `scored`, for after scoring.yaml changed. "
+             "Pair with --dry-run first: `filtered` is terminal",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="with --recheck, report what would be filtered and write nothing",
+    )
     args = parser.parse_args(argv)
 
     conn = connect()
@@ -570,6 +606,13 @@ def main(argv: list[str] | None = None) -> int:
         with runs.track(conn, "score") as report:
             if args.batch_id:
                 counts = apply_batch(conn, args.batch_id, on_progress=report)
+            elif args.recheck:
+                # Takes the same lock as everything else here: it moves rows out
+                # of `scored`, and a full run racing it would be scoring rows
+                # this is retiring.
+                counts = prefilter.recheck(
+                    conn, dry_run=args.dry_run, limit=args.limit, on_progress=report
+                )
             elif args.prefilter_only:
                 counts = prefilter.run(conn, limit=args.limit, on_progress=report)
             else:
@@ -578,7 +621,7 @@ def main(argv: list[str] | None = None) -> int:
                     conn, limit=args.limit, use_batch=not args.sync,
                     wait=not args.no_wait, on_progress=report,
                 )
-            if args.batch_id or args.prefilter_only:
+            if args.batch_id or args.prefilter_only or args.recheck:
                 report(
                     phase="finished", message=_summary(counts),
                     done=0, total=None, counts=tally(counts),

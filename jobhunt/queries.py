@@ -246,12 +246,21 @@ def _sort_value(record: dict[str, Any], column: str) -> Any:
 def sort_records(
     records: list[dict[str, Any]], column: str, direction: str
 ) -> list[dict[str, Any]]:
-    ranked = [r for r in records if _sort_value(r, column) is not None]
-    unranked = [r for r in records if _sort_value(r, column) is None]
-    ranked.sort(key=lambda r: _sort_value(r, column), reverse=direction == "desc")
+    """Rows with a value first, in `direction`; rows with none trail, newest first.
+
+    The key is computed once per row rather than three times — the two partition
+    passes and the sort each called `_sort_value` again, which for the whole
+    pipeline table meant ~16,500 dispatches to answer 5,500 questions.
+    """
+    keyed = [(_sort_value(record, column), record) for record in records]
+    ranked = [pair for pair in keyed if pair[0] is not None]
+    unranked = [record for value, record in keyed if value is None]
+    # `key=` compares the sort value alone, never the dict beside it — which
+    # would raise the moment two rows tied.
+    ranked.sort(key=lambda pair: pair[0], reverse=direction == "desc")
     # Tie-break and trailing group both fall back to most recent first.
     unranked.sort(key=lambda r: r["id"], reverse=True)
-    return ranked + unranked
+    return [record for _, record in ranked] + unranked
 
 
 def filter_applications(

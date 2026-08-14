@@ -8,6 +8,7 @@ Both are on the short list of things worth table-driven tests against real URLs.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Source tags, not job identifiers. Anything that could identify a posting stays.
@@ -135,12 +136,21 @@ def normalize_apply_url(url: str) -> str:
     return urlunsplit(("https", host, path, urlencode(kept), ""))
 
 
+@lru_cache(maxsize=16384)
 def detect_ats(apply_url: str) -> tuple[str | None, str | None]:
     """Return `(ats_type, ats_slug)` derived from the apply URL.
 
     Total by design: this runs on every row of the index and the stats tables, so
     one unparseable URL must not take those pages down. Unrecognized and
     unparseable both mean "bucket it as other / direct".
+
+    Memoized because it is pure and because the same URLs are re-derived several
+    times per page: the pipeline view decorates every row, `facets` scans them
+    again for the filter options, and each of the three stats tables walks the
+    whole set once more. Up to 27 patterns a call against ~5,500 rows, five
+    times over, for an answer that cannot change without the row changing. The
+    cache is per process and bounded; a stale entry is not representable, since
+    the URL is the whole input.
     """
     try:
         parts = urlsplit(apply_url if "//" in apply_url else f"https://{apply_url}")

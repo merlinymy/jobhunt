@@ -1,12 +1,12 @@
 import {
-  ArrowRight, Check, ExternalLink, Handshake, Loader2, SkipForward, Undo2,
+  ArrowRight, Check, ExternalLink, Handshake, SkipForward, Undo2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { useDecide } from "../api/mutations";
-import { useJobDescription, useReview, useRuns } from "../api/queries";
+import { useJobDescription, useReview } from "../api/queries";
 import type { ReviewCard } from "../api/types";
 import { Discovery } from "../components/Discovery";
 import { Sheet } from "../components/Sheet";
@@ -58,10 +58,6 @@ export default function Review() {
   const limit = Number(params.get("limit") ?? 8);
   const { data, isPending, error, refetch } = useReview(limit);
   const decide = useDecide(limit);
-  // Approving starts a packet build; this is only used to swap the link label
-  // while one is going, so an idle poll is not worth paying for.
-  const { data: runs } = useRuns();
-  const building = runs?.active?.task === "packet";
   const [reading, setReading] = useState<ReviewCard | null>(null);
   const pendingSkip = useRef(new Map<number, number>());
 
@@ -181,24 +177,15 @@ export default function Review() {
                     <Pill tone={card.decided === "approved" ? "text-good" : "text-dim"}>
                       {card.decided}
                     </Pill>
-                    {/* The whole point of approving. It used to be five clicks
-                        away on another page; the build is already running by
-                        the time this renders. */}
+                    {/* Where approving leads, not what it did. Approving is
+                        free and builds nothing; the money is spent by the
+                        button on the other end of this link. */}
                     {card.decided === "approved" && (
                       <Link
                         to={`/packet/${card.application_id}`}
                         className="inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline"
                       >
-                        {building ? (
-                          <>
-                            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                            building packet
-                          </>
-                        ) : (
-                          <>
-                            Open packet <ArrowRight className="size-3.5" aria-hidden />
-                          </>
-                        )}
+                        Build packet <ArrowRight className="size-3.5" aria-hidden />
                       </Link>
                     )}
                   </>

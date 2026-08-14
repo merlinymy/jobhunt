@@ -110,7 +110,7 @@ export default function ApplicationDetail() {
         <ol className="mt-2 grid gap-2 text-sm">
           {events.map((event) => (
             <li key={event.id} className="flex gap-3">
-              <span className="shrink-0 text-dim tabular">{dateOnly(event.created_at)}</span>
+              <span className="shrink-0 text-dim tabular">{dateOnly(event.occurred_at)}</span>
               <span className="min-w-0">
                 <span className="font-medium">
                   {event.to_state ? label(event.to_state) : event.kind}

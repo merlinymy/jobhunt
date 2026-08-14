@@ -62,33 +62,20 @@ class Gap:
         }
 
 
-def _corpus_numbers(conn: sqlite3.Connection) -> set[str]:
-    """Every number the corpus states, digits and words alike.
-
-    Built from bullet text and metrics rather than `tailor._corpus_haystack`,
-    which splices in 672 KB of per-bullet parent digests and is then truncated to
-    12 KB by its only caller. This is ~30 KB and complete, which is the property
-    that matters when the question is "did the model invent this figure".
-    """
-    hay = " ".join(
-        f"{b['text']} {b['metric'] or ''}" for b in queries.corpus_bullets(conn)
-    )
-    return set(tailor._numbers(hay)) | tailor._spelled_numbers(hay)
-
-
-def check_say(conn: sqlite3.Connection, gap: Gap) -> list[str]:
+def check_say(conn: sqlite3.Connection, gap: Gap, allowed: set[str] | None = None) -> list[str]:
     """Numbers in `say` that the corpus does not contain.
 
     `say` is the sentence handed to an interviewer, so a figure invented here is
     a fabrication with a person on the other end of it — the same failure the
     resume validator exists to prevent, arriving through a door that had no
     validator on it. Deterministic and free, so it runs on every gap.
+
+    `allowed` is `tailor.corpus_numbers`, passed in when checking a batch so the
+    corpus is read once for eight gaps rather than eight times.
     """
-    allowed = _corpus_numbers(conn)
-    written = set(tailor._numbers(gap.say, standalone_only=True)) | tailor._spelled_numbers(
-        gap.say
+    return tailor.unsourced_numbers(
+        gap.say, tailor.corpus_numbers(conn) if allowed is None else allowed
     )
-    return sorted(n for n in written if n not in allowed)
 
 
 def stored(conn: sqlite3.Connection, application_id: int) -> list[Gap] | None:
@@ -142,6 +129,7 @@ def parse(conn: sqlite3.Connection, raw: str) -> list[Gap]:
         raise GapError("the reply has no `gaps` array")
 
     real = {int(b["id"]) for b in queries.corpus_bullets(conn)}
+    allowed = tailor.corpus_numbers(conn)  # once for the batch, not once per gap
     out: list[Gap] = []
     for item in items[:MAX_GAPS]:
         if not isinstance(item, dict) or not str(item.get("wanted") or "").strip():
@@ -162,7 +150,7 @@ def parse(conn: sqlite3.Connection, raw: str) -> list[Gap]:
             bullet_ids=ids,
             say=str(item.get("say") or "").strip(),
         )
-        gap.unsourced = check_say(conn, gap)
+        gap.unsourced = check_say(conn, gap, allowed)
         out.append(gap)
     return out
 

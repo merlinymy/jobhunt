@@ -7,6 +7,7 @@ rather than in 001_init.sql — which must never be edited after it has run.
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -27,14 +28,63 @@ class MigrationChanged(RuntimeError):
     """An already-applied migration file was edited."""
 
 
+class MigrationNumberClash(RuntimeError):
+    """Two migration files claim the same number, and one has not run yet."""
+
+
+_NUMBER = re.compile(r"^(\d+)_")
+
+# The one number ever issued twice. Both files shipped long before this check
+# existed, and a migration cannot be renamed once it has run.
+#
+# Named explicitly rather than inferred from what the database has already
+# applied, which is the version of this that got written first and was wrong in
+# the one case that matters: on a *fresh* database nothing is applied, so both of
+# these are pending, the clash fires, and `make migrate` can never create a
+# database at all. That path is first-time setup, `make test`, and the weekly
+# restore drill — the three places a bootstrap failure is worst. A rule about
+# filenames should not consult the database, and now it does not.
+GRANDFATHERED = frozenset({"010_resume_findings.sql", "010_runs.sql"})
+
+
+def check_numbering(paths: list[Path]) -> None:
+    """Refuse a migration whose number another file already claims.
+
+    Files are applied in `sorted()` order, which is by filename — so two files
+    numbered 010 run in alphabetical order of whatever follows the number, which
+    is not an order anybody chose. The pair above is exactly that: they are
+    independent, so the order between them happens not to matter, and the next
+    collision will not be so lucky. This is what stops a third file joining them,
+    or a new one reusing any number already spent.
+    """
+    numbered: dict[str, list[Path]] = {}
+    for path in paths:
+        match = _NUMBER.match(path.name)
+        if match:
+            numbered.setdefault(match.group(1).lstrip("0") or "0", []).append(path)
+    for number, group in sorted(numbered.items()):
+        if len(group) < 2:
+            continue
+        offenders = sorted(p.name for p in group if p.name not in GRANDFATHERED)
+        if offenders:
+            raise MigrationNumberClash(
+                f"migration number {number} is claimed by {len(group)} files — "
+                f"{sorted(p.name for p in group)}. They apply in filename order, so "
+                f"the order between them is alphabetical rather than chosen. "
+                f"Renumber {offenders} to the next free number."
+            )
+
+
 def pending(conn: sqlite3.Connection) -> list[Path]:
     conn.execute(BOOKKEEPING)
     applied = {
         row["filename"]: row["sha256"]
         for row in conn.execute("SELECT filename, sha256 FROM schema_migrations")
     }
+    on_disk = sorted(config.MIGRATIONS_DIR.glob("*.sql"))
+    check_numbering(on_disk)
     todo = []
-    for path in sorted(config.MIGRATIONS_DIR.glob("*.sql")):
+    for path in on_disk:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if path.name not in applied:
             todo.append(path)

@@ -89,16 +89,25 @@ def _throttle(host: str) -> None:
 
     Jittered, so two runs a day do not arrive as an identifiable metronome and
     a retry storm cannot synchronise across hosts.
+
+    The slot is reserved under the lock and the waiting happens outside it. That
+    is the difference between pacing each host and pacing the process: sleeping
+    while holding a lock every host shares makes a caller bound for Greenhouse
+    wait out Ashby's interval, which is the per-run pacing this function exists
+    to replace. Single-threaded today, so it changes nothing yet — but the lock
+    only means anything under concurrency, and it was wrong for exactly that.
+
+    Reserving before releasing is what keeps two callers for the *same* host
+    correct: the second reads the slot the first just claimed and queues behind
+    it, rather than reading a stale timestamp and firing alongside it.
     """
     interval = _MIN_INTERVAL.get(host, _DEFAULT_INTERVAL)
     with _throttle_lock:
-        now = time.monotonic()
-        earliest = _last_request.get(host, 0.0) + interval
-        wait = earliest - now
-        if wait > 0:
-            time.sleep(wait)
-            now = time.monotonic()
-        _last_request[host] = now + random.uniform(0, interval * 0.25)
+        earliest = max(time.monotonic(), _last_request.get(host, 0.0) + interval)
+        _last_request[host] = earliest + random.uniform(0, interval * 0.25)
+    wait = earliest - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
 
 
 def _get(url: str) -> Any:

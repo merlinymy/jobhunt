@@ -227,6 +227,29 @@ function BuildProgress({
     return null;
   }
 
+  // `progress.total` is set by `tailor.build_pending` and by nothing else, so it
+  // is exactly the tell that this run is the whole-backlog drain — `make tailor`
+  // in a terminal — rather than the build this page started. Nothing on the
+  // dashboard starts one any more.
+  //
+  // The distinction has to gate the timeline, not sit under it. Everything below
+  // — the phase, the message, the ✓ / › / · steps — describes whichever row the
+  // batch is on, and rendering that on this application's page said "your packet
+  // is being checked" about somebody else's. The caveat used to be one line of
+  // dim text beneath a card that had already claimed otherwise.
+  const batch = run.progress?.total ? run.progress : null;
+  if (batch) {
+    return (
+      <Card className="mb-4 border-dim/30">
+        <p className="flex items-center gap-2 text-sm text-dim">
+          <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />
+          The packet worker is busy — building {batch.done} of {batch.total} from the
+          approved queue. That is not this application, so Build here has to wait.
+        </p>
+      </Card>
+    );
+  }
+
   const phase = run.progress?.phase ?? "selecting";
   const at = BUILD_PHASES.indexOf(phase as (typeof BUILD_PHASES)[number]);
   return (
@@ -253,12 +276,6 @@ function BuildProgress({
           </li>
         ))}
       </ol>
-      {run.task === "packet" && run.progress?.total ? (
-        <p className="mt-2 text-sm text-dim">
-          Building {run.progress.done} of {run.progress.total} — this is the queued
-          batch, not just this one.
-        </p>
-      ) : null}
     </Card>
   );
 }

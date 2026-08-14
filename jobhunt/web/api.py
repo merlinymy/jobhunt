@@ -24,8 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from .. import (
-    answers, chat, config, db, formfill, gaps, llm, prompts, queries, resume, runs,
-    tailor,
+    answers, config, db, formfill, gaps, llm, packet_chat, prompts, queries, resume,
+    runs, tailor,
 )
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 from . import actions, runner, views
@@ -256,6 +256,18 @@ def application_detail(conn: Conn, application_id: int) -> dict[str, Any]:
         raise HTTPException(404, str(exc)) from exc
 
 
+# These three return the *whole* detail view, not `state_panel`.
+#
+# The client writes the response straight into the `/applications/{id}` cache
+# slot, which is what the detail page renders from — so a `state_panel` reply,
+# carrying `app` and `events` but no `referrals`, silently deleted a key the page
+# reads. Moving an application to `applied` crashed the page that moved it, on
+# `referrals.length` of undefined. Nothing caught it: the client's `Detail` type
+# says what these send, and it was simply wrong about it.
+#
+# The extra cost is one indexed lookup of the company's contacts, on a click.
+
+
 @router.post("/applications/{application_id}/transition")
 def post_transition(
     conn: Conn, application_id: int, payload: TransitionRequest
@@ -266,7 +278,7 @@ def post_transition(
         raise HTTPException(422, str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return views.state_panel(conn, application_id)
+    return views.detail_view(conn, application_id)
 
 
 @router.post("/applications/{application_id}/note")
@@ -275,7 +287,7 @@ def post_note(conn: Conn, application_id: int, payload: NoteRequest) -> dict[str
         actions.add_note(conn, application_id, payload.detail)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
-    return views.state_panel(conn, application_id)
+    return views.detail_view(conn, application_id)
 
 
 @router.post("/applications/{application_id}/honesty")
@@ -289,7 +301,7 @@ def post_honesty(
     except ValueError as exc:  # the guard in queries raises on anything but 0/1
         raise HTTPException(422, str(exc)) from exc
     try:
-        return views.state_panel(conn, application_id)
+        return views.detail_view(conn, application_id)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -338,27 +350,28 @@ def _decide(conn: sqlite3.Connection, application_id: int, to_state: str) -> dic
 
 @router.post("/review/{application_id}/approve")
 def review_approve(conn: Conn, application_id: int) -> dict[str, Any]:
-    """Approve, and start the packet it was approved for.
+    """Approve the job. Nothing is built, and nothing is spent.
 
-    Approving used to end here, five clicks short of the thing being approved
-    for. It now kicks off a packet build, which is a separate concern in every
-    respect that matters: it happens after the decision is committed, it cannot
-    unmake it, and a failure to start is reported as a field rather than an
-    error. `job_approved` is the queue, so a build already running picks this
-    row up on its next pass and a second one is neither needed nor possible.
+    This used to start a packet build, and the build it started was not this
+    one: it ran `tailor.build_pending`, which drains *every* `job_approved` row.
+    So a review session where two cards were approved produced four packets,
+    twelve model calls and $1.12 — two of them for rows approved days earlier
+    that were never asked for now. The packet page then showed that batch's
+    progress, which is where "Building 3 of 4 — this is the queued batch, not
+    just this one" came from: a phase timeline for somebody else's application,
+    on yours.
+
+    Approving and building are different decisions and now cost differently.
+    Approving says "this is worth a shot" and is free; Build on the packet page
+    says "spend two model calls on it now". Separating them is what keeps
+    `job_approved` a queue rather than a bill, and it is what makes the review
+    queue safe to work through quickly.
+
+    `make tailor` still drains the whole backlog, for when that is what you want.
     """
     from .. import states
 
-    decision = _decide(conn, application_id, states.JOB_APPROVED)
-    try:
-        runner.start(conn, "packet")
-        decision["packet"] = "started"
-    except runs.AlreadyRunning:
-        # A build is going. It re-queries `job_approved`, so this row is in it.
-        decision["packet"] = "queued"
-    except runner.NotReady as exc:
-        decision["packet"] = f"not started — {exc}"
-    return decision
+    return _decide(conn, application_id, states.JOB_APPROVED)
 
 
 @router.post("/review/{application_id}/skip")
@@ -382,6 +395,10 @@ def _packet_payload(
     # Record the gaps on every view, not only on build: the count is what says a
     # question belongs in facts.yaml, and the packet is seen more often than built.
     answers.flag_unknowns(conn, resolved["answers"], application_id)
+    # Read once. `None` and `[]` mean different things here — never analysed
+    # versus analysed and nothing missing — so the distinction is kept rather
+    # than collapsed, but it does not need two round trips to make.
+    found_gaps = gaps.stored(conn, application_id)
     # The live packet run, if there is one. The lock is global to the task, so
     # this may be the `job_approved` batch rather than this row — which is still
     # the honest answer to "why is the button refusing", and the phase says which.
@@ -395,11 +412,11 @@ def _packet_payload(
         # The resume as readable text. The PDF is the artifact that gets
         # submitted; this is the one you can actually read on a phone and quote
         # from into the chat box, numbered the same way the model sees it.
-        "resume_text": chat.resume_text(conn, application_id),
-        "gaps": [g.as_dict() for g in (gaps.stored(conn, application_id) or [])],
+        "resume_text": packet_chat.resume_text(conn, application_id),
+        "gaps": [g.as_dict() for g in (found_gaps or [])],
         "form_answers": [d.as_dict() for d in formfill.stored(conn, application_id)],
-        "gaps_analysed": gaps.stored(conn, application_id) is not None,
-        "messages": chat.messages(conn, application_id),
+        "gaps_analysed": found_gaps is not None,
+        "messages": packet_chat.messages(conn, application_id),
         "error": error,
     }
 
@@ -438,8 +455,11 @@ class ChatMessage(BaseModel):
 
 
 @router.get("/packet/{application_id}/chat")
-def packet_chat(conn: Conn, application_id: int) -> dict[str, Any]:
-    return {"messages": chat.messages(conn, application_id)}
+def get_packet_chat(conn: Conn, application_id: int) -> dict[str, Any]:
+    # Not `packet_chat`: a route handler is a module-level name, so that would
+    # rebind the imported module to this function and every other reference to
+    # it in this file would resolve to a function with no `.messages`.
+    return {"messages": packet_chat.messages(conn, application_id)}
 
 
 @router.post("/packet/{application_id}/chat")
@@ -455,12 +475,12 @@ def packet_chat_send(
     if queries.get_application(conn, application_id) is None:
         raise HTTPException(404, "no such application")
     try:
-        reply = chat.send(conn, application_id, payload.message)
-    except chat.ChatError as exc:
+        reply = packet_chat.send(conn, application_id, payload.message)
+    except packet_chat.ChatError as exc:
         raise HTTPException(422, str(exc)) from exc
     except llm.LLMError as exc:
         raise HTTPException(502, f"the model call failed: {exc}") from exc
-    return {"messages": chat.messages(conn, application_id), "reply": reply}
+    return {"messages": packet_chat.messages(conn, application_id), "reply": reply}
 
 
 @router.post("/packet/{application_id}/chat/{message_id}/apply")
@@ -474,16 +494,16 @@ def packet_chat_apply(
     the wait beyond the spinner already on the button.
     """
     try:
-        chat.apply(conn, application_id, message_id)
+        packet_chat.apply(conn, application_id, message_id)
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from exc
-    except chat.ChatError as exc:
+    except packet_chat.ChatError as exc:
         raise HTTPException(422, str(exc)) from exc
     except (tailor.TailorError, llm.LLMError, resume.ResumeError) as exc:
         raise HTTPException(422, f"{type(exc).__name__}: {exc}") from exc
     return {
         **_packet_payload(conn, application_id),
-        "messages": chat.messages(conn, application_id),
+        "messages": packet_chat.messages(conn, application_id),
     }
 
 

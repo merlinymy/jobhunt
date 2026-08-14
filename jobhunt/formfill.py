@@ -144,8 +144,17 @@ def build_prompt(
     )
 
 
-def parse(conn: sqlite3.Connection, raw: str, asked: list[str]) -> list[Drafted]:
-    """The reply into rows, with the fact substitution done here, not there."""
+def parse(
+    conn: sqlite3.Connection,
+    raw: str,
+    asked: list[str],
+    *,
+    company_id: int | None = None,
+) -> list[Drafted]:
+    """The reply into rows, with the fact substitution done here, not there.
+
+    `company_id` is what makes the per-company facts resolvable. See `_fact_answer`.
+    """
     text = raw.strip()
     if not text.startswith("{"):
         start, end = text.find("{"), text.rfind("}")
@@ -161,6 +170,11 @@ def parse(conn: sqlite3.Connection, raw: str, asked: list[str]) -> list[Drafted]
     if not isinstance(items, list):
         raise FormError("the reply has no `answers` array")
 
+    # Once for the whole form. This was rebuilt inside the option loop, so a
+    # twelve-question paste with five options each read the entire corpus out of
+    # SQLite and re-scanned it sixty times to answer one question that does not
+    # change between them.
+    allowed = tailor.corpus_numbers(conn)
     out: list[Drafted] = []
     for index, question in enumerate(asked):
         item = items[index] if index < len(items) and isinstance(items[index], dict) else {}
@@ -173,7 +187,7 @@ def parse(conn: sqlite3.Connection, raw: str, asked: list[str]) -> list[Drafted]
             # Routed to a settled question. Whatever the model may have written
             # is discarded unread: the recorded wording is the answer, verbatim,
             # and this is the branch where that invariant is actually enforced.
-            resolved = _fact_answer(conn, key)
+            resolved = _fact_answer(conn, key, company_id)
             out.append(
                 Drafted(
                     question=question,
@@ -195,35 +209,29 @@ def parse(conn: sqlite3.Connection, raw: str, asked: list[str]) -> list[Drafted]
         drafted.unsourced = {
             str(i): bad
             for i, option in enumerate(drafted.options)
-            if (bad := _unsourced_numbers(conn, option))
+            if (bad := tailor.unsourced_numbers(option, allowed))
         }
         out.append(drafted)
     return out
 
 
-def _fact_answer(conn: sqlite3.Connection, key: str) -> str:
-    """The recorded answer for a settled question, or "" if none is stored."""
-    row = conn.execute(
-        "SELECT answer FROM answers WHERE question_key = ? AND company_id IS NULL "
-        "ORDER BY id DESC LIMIT 1",
-        (key,),
-    ).fetchone()
-    return str(row["answer"]).strip() if row and row["answer"] else ""
+def _fact_answer(
+    conn: sqlite3.Connection, key: str, company_id: int | None = None
+) -> str:
+    """The recorded answer for a settled question, or "" if none is stored.
 
-
-def _unsourced_numbers(conn: sqlite3.Connection, text: str) -> list[str]:
-    """Figures in a drafted answer that no corpus row states.
-
-    Same check the gap answers get, for the same reason: this goes into a box a
-    person reads, and an invented number there is a fabrication with someone on
-    the other end of it.
+    Resolved through the bank's own rule — company override, then global — rather
+    than a hand-written query. This looked only at `company_id IS NULL`, which is
+    the wrong half for `salary_expectation`: it is fact-tier, so the catalogue
+    offers it to the router, and it is per-company *by design* — there is no
+    global default, because the number depends on the job's market. So a form
+    asking for salary expectations resolved to nothing and the page reported "your
+    profile has no answer recorded for it yet", with the figure already quoted to
+    that employer sitting one row away. Quoting one employer two different numbers
+    is the exact failure `answers.py` exists to prevent.
     """
-    hay = " ".join(
-        f"{b['text']} {b['metric'] or ''}" for b in queries.corpus_bullets(conn)
-    )
-    allowed = set(tailor._numbers(hay)) | tailor._spelled_numbers(hay)
-    written = set(tailor._numbers(text, standalone_only=True)) | tailor._spelled_numbers(text)
-    return sorted(n for n in written if n not in allowed)
+    row = answers.lookup(conn, key, company_id)
+    return str(row["answer"]).strip() if row and row["answer"] else ""
 
 
 def stored(conn: sqlite3.Connection, application_id: int) -> list[Drafted]:
@@ -274,7 +282,12 @@ def draft(
         application_id=application_id,
         expect_repeat=True,
     )
-    rows = parse(conn, raw, questions)
+    # The employer, so a routed per-company fact — salary — resolves to the
+    # figure already quoted to them rather than to nothing. See `_fact_answer`.
+    rows = parse(
+        conn, raw, questions,
+        company_id=queries.company_id_for_application(conn, application_id),
+    )
     _save(conn, application_id, rows)
     return rows
 
