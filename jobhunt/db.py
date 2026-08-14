@@ -174,7 +174,35 @@ def connect(
         mode = "rw"
 
     # isolation_level=None: no implicit BEGIN. Transactions are explicit, below.
-    conn = sqlite3.connect(f"{db_path.as_uri()}?mode={mode}", uri=True, isolation_level=None)
+    #
+    # check_same_thread=False because FastAPI does not promise that a sync
+    # dependency and the sync endpoint it feeds run on the same threadpool
+    # worker — and under concurrency they usually do not. `get_conn` opens the
+    # connection in whichever worker anyio hands the dependency, the endpoint
+    # then runs in whichever worker anyio hands *it*, and sqlite3's default
+    # same-thread check raises ProgrammingError before a single row is read.
+    #
+    # Measured: 6 of 9 concurrent requests landed on a different thread than
+    # their own dependency. It read as random 500s, and it read as *sleep*,
+    # because waking the laptop makes the SPA refetch every mounted query at
+    # once — which is precisely the concurrency that splits the two apart. Two
+    # polling pages overlapping do it just as well.
+    #
+    # Safe here, and not merely expedient. `sqlite3.threadsafety` is 3
+    # (SERIALIZED) in this build, so the library serializes access itself; and
+    # nothing in this codebase uses one connection from two threads at a time
+    # anyway. FastAPI awaits dependency setup, then the endpoint, then teardown,
+    # strictly in sequence, and every background worker opens its own connection
+    # precisely so it is not sharing this one. What is being switched off is a
+    # check for a condition that does not arise — but if a future caller ever
+    # does hand one connection to two live threads, this is the guard that would
+    # have caught it, so open a second connection instead.
+    conn = sqlite3.connect(
+        f"{db_path.as_uri()}?mode={mode}",
+        uri=True,
+        isolation_level=None,
+        check_same_thread=False,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
