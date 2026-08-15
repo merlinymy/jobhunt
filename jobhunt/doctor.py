@@ -350,7 +350,8 @@ def corpus_metrics() -> Check:
 def extras() -> Check:
     """The optional deps are imported lazily inside functions, so a venv missing
     them installs clean and then dies at 06:30 on `import jobspy`."""
-    wanted = {"anthropic": "llm", "jobspy": "ingest", "rendercv": "resume"}
+    wanted = {"anthropic": "llm", "jobspy": "ingest", "rendercv": "resume",
+              "docx": "resume", "pypdf": "resume"}
     missing = [m for m in wanted if importlib.util.find_spec(m) is None]
     if missing:
         groups = ",".join(sorted({wanted[m] for m in missing}))
@@ -358,6 +359,25 @@ def extras() -> Check:
             "extras", False, f"missing {missing} — uv pip install -e '.[{groups}]'"
         )
     return Check("extras", True, f"{', '.join(sorted(wanted))} importable")
+
+
+def libreoffice() -> Check:
+    """The .docx -> submission PDF step shells out to LibreOffice (Phase 2 choice).
+
+    A host dependency, not a Python one, so it is checked separately. Without it a
+    packet build cannot produce the PDF that carries the §8 work-auth line — and
+    the code refuses to fall back to a renderer that would drop it.
+    """
+    from . import docx_render
+
+    found = docx_render.find_soffice()
+    if found is None:
+        return Check(
+            "libreoffice", False,
+            "soffice not found — the .docx -> PDF step needs it. "
+            "brew install --cask libreoffice",
+        )
+    return Check("libreoffice", True, found)
 
 
 def secrets() -> Check:
@@ -428,6 +448,7 @@ CHECKS = (
     discovery_runs,
     corpus_metrics,
     extras,
+    libreoffice,
     secrets,
     bind,
     tailscale,

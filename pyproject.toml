@@ -21,7 +21,11 @@ llm = ["anthropic>=0.40"]                      # Phase 2/4/5 — llm.py
 resume = [
   "rendercv[full]>=2.8",                       # Phase 2 — master data -> PDF
   "python-docx>=1.1",                          # Phase 2 — the .docx master renderer
+  "pypdf>=4.0",                                # Phase 2 — copy-paste-in-order PDF check
 ]
+# LibreOffice is a *host* dependency, not a Python one: the .docx -> submission
+# PDF step shells out to `soffice --headless`. Install it on the mini
+# (`brew install --cask libreoffice`). doctor checks for it.
 # 1.1.82 is what a working sweep was verified against. Of the four US sources it
 # exposes, only Indeed returns anything — see config/searches.yaml.
 ingest = ["python-jobspy>=1.1.82"]             # Phase 4 — discovery

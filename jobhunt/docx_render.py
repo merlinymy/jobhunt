@@ -221,3 +221,105 @@ def docx_text_in_order(data: bytes) -> list[str]:
 
     doc = Document(io.BytesIO(data))
     return [p.text for p in doc.paragraphs if p.text.strip()]
+
+
+# =============================== docx -> PDF ===============================
+#
+# The submission PDF is derived from the .docx master via LibreOffice headless
+# (the reviewed Phase 2 decision), which carries the §8 work-auth header line
+# through to the PDF and produces a text-based, copy-paste-in-order PDF.
+# LibreOffice is therefore a deploy dependency on the host; this raises a clear
+# error rather than silently falling back to a renderer that drops the work-auth
+# line.
+
+_SOFFICE_CANDIDATES = (
+    "soffice",
+    "libreoffice",
+    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+)
+
+
+def find_soffice() -> str | None:
+    """The LibreOffice CLI, or None when it is not installed."""
+    import os
+    import shutil
+
+    for candidate in _SOFFICE_CANDIDATES:
+        found = shutil.which(candidate)
+        if found:
+            return found
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def docx_to_pdf(docx_bytes: bytes) -> bytes:
+    """Convert .docx bytes to a text-based PDF via LibreOffice headless.
+
+    Raises `DocxError` naming the missing dependency rather than falling back —
+    Option 1 was chosen precisely so the work-auth line reaches the PDF, and a
+    silent fallback to RenderCV would drop it.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    soffice = find_soffice()
+    if soffice is None:
+        raise DocxError(
+            "LibreOffice (soffice) is not installed, so the .docx cannot be "
+            "converted to the submission PDF. Install it on the host — e.g. "
+            "`brew install --cask libreoffice`. It is the reviewed docx->PDF path."
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "resume.docx"
+        src.write_bytes(docx_bytes)
+        # A per-conversion user profile dir, so concurrent runs do not collide on
+        # LibreOffice's default profile lock.
+        profile = Path(tmp) / "lo-profile"
+        result = subprocess.run(
+            [soffice, "--headless", f"-env:UserInstallation=file://{profile}",
+             "--convert-to", "pdf", "--outdir", tmp, str(src)],
+            capture_output=True, text=True, timeout=120,
+        )
+        produced = Path(tmp) / "resume.pdf"
+        if result.returncode != 0 or not produced.is_file():
+            detail = (result.stdout + result.stderr).strip()[-800:]
+            raise DocxError(f"soffice docx->pdf failed (exit {result.returncode}):\n{detail}")
+        return produced.read_bytes()
+
+
+def pdf_text_in_order(pdf_bytes: bytes) -> list[str]:
+    """The PDF's text as a flat token stream, for the §8 copy-paste-in-order test.
+
+    Uses pypdf if present; otherwise raises so the check is never silently
+    skipped. Run on the host where the PDF (and LibreOffice) exist.
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # pragma: no cover
+        raise DocxError(
+            "pypdf is not installed, so the PDF copy-paste-in-order check cannot "
+            "run. Install it with: uv pip install pypdf"
+        ) from exc
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def verify_copy_paste_order(docx_bytes: bytes, pdf_bytes: bytes) -> bool:
+    """True if the PDF's text preserves the .docx master's paragraph order.
+
+    The §8 copy-paste-in-order test, verified rather than asserted: every docx
+    line appears in the PDF text, in the same relative order.
+    """
+    pdf_text = "\n".join(pdf_text_in_order(pdf_bytes))
+    cursor = 0
+    for line in docx_text_in_order(docx_bytes):
+        head = line[:40]
+        found = pdf_text.find(head, cursor)
+        if found < 0:
+            return False
+        cursor = found + len(head)
+    return True
