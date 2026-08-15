@@ -39,13 +39,13 @@ rates:
     input: 1.0
     output: 5.0
 
-# Sizing max_tokens: with adaptive thinking enabled (above) the budget covers
-# reasoning *and* the reply. A budget sized from the visible output alone will
-# truncate. Leaving reasoning off is not the fix — with it disabled the model
-# sometimes writes <thinking> tags into the response, which breaks any caller
-# parsing JSON out of it. Budget generously instead; you are billed for tokens
-# produced, not for the ceiling. llm.py raises on a truncated reply rather than
-# handing back half a JSON object.
+# max_tokens is required by the API, but there is no per-task budget to tune: one
+# global ceiling, the model's 128k max output. Streaming (llm.py) makes a ceiling
+# this large safe, and you are billed for tokens produced, not for the ceiling —
+# so it never truncates and costs nothing extra. Reasoning shares the ceiling with
+# the reply, which is the whole reason it is set at the max. A task may still set
+# its own `max_tokens` to cap a genuine runaway; none needs to.
+max_tokens: 128000
 
 tasks:
   select:
@@ -55,16 +55,9 @@ tasks:
     # quality needs it. Title and skills are deterministic post-processing in
     # select.py, never model output. The library block is cached every call.
     model: claude-opus-4-8
-    # A small JSON reply, but max-effort thinking alone can exceed 4000 — generous
-    # headroom for reasoning + the reply; billed for produced, not the ceiling.
-    max_tokens: 12000
     cache_profile: true
   tailor:
     model: claude-opus-4-8     # quality-critical, ~100 calls/mo, drives callbacks
-    # 2000 truncated at the dashboard's own limit ceiling of 30 bullets, and a
-    # 10-bullet call already used 1562. 30 long bullets plus reasoning needs
-    # roughly 5k; 8000 leaves room for a corpus that keeps growing.
-    max_tokens: 16000
     cache_profile: true      # profile corpus is identical every call
   tailor_check:
     # Reads each emitted line against its own source row and says whether the
@@ -77,14 +70,6 @@ tasks:
     # available, and the reason not to "save a call" by asking Opus to check
     # itself in the same reply.
     model: claude-opus-4-8
-    # 2000 was sized from the JSON reply alone — about 400 tokens — and truncated
-    # on the first real packet, which is exactly the mistake the note above this
-    # block describes. The budget covers reasoning too, and this task reasons per
-    # pair: ten lines each compared against their own source is ten separate
-    # judgements before a word of the reply is written. Sized generously because
-    # you are billed for tokens produced, not for the ceiling, and because a
-    # truncated reply here fails the packet rather than degrading it.
-    max_tokens: 16000
     cache_profile: false     # the corpus is not sent — see config/prompts/tailor_check.md
   form_answers:
     # Every free-text box on one form, five options each, in one call. Batched
@@ -93,10 +78,8 @@ tasks:
     # corpus is cached once for the form rather than once per question.
     #
     # The output is the largest of any task here: five answers times however many
-    # boxes the form has, plus max-effort thinking on top — 12000 truncated. 24000
-    # covers a long form and its reasoning; billed for produced, not the ceiling.
+    # boxes the form has, plus max-effort thinking on top.
     model: claude-opus-4-8
-    max_tokens: 24000
     cache_profile: true
   gaps:
     # Runs once per application, before tailoring, and its answer is stored — it
@@ -109,12 +92,6 @@ tasks:
     # the reasoning a cheaper tier flattens into keyword overlap. A weak answer
     # here is worse than none — it puts a stretch in front of an interviewer.
     model: claude-opus-4-8
-    # 4000 truncated on the first real posting. The budget covers reasoning, and
-    # this task reasons per gap: each one is a pass over the whole corpus asking
-    # "is there anything adjacent to this", before a word of the reply is
-    # written. Same shape as tailor_check, and the same lesson — you are billed
-    # for tokens produced, not for the ceiling, so size it generously.
-    max_tokens: 16000
     cache_profile: true      # the corpus block is the same one `tailor` sends
   tailor_revise:
     # Conversational revision of a built resume, and deliberately **the same
@@ -132,24 +109,16 @@ tasks:
     # honest.
     system_prompt: prompts/tailor.md
     model: claude-opus-4-8
-    max_tokens: 16000         # emits a full resume plus reasoning, same as tailor
     cache_profile: true      # same corpus every turn, byte-identical
   narrative:
     model: claude-opus-4-8     # "why this company"; cached per company after first call
-    max_tokens: 12000        # short reply, but max-effort thinking needs the headroom
     cache_profile: true
   score:
     model: claude-opus-4-8   # ~600 calls/mo, I review the ranking anyway
-    # Reasons at max effort now like every task, so the budget must cover thinking
-    # plus the score and its sentence — 200 (the old Haiku reply-only budget) would
-    # truncate on the thinking alone. Billed for tokens produced, not the ceiling.
-    max_tokens: 16000
     cache_profile: true
     batch: true              # not latency-sensitive; runs before the 8am digest
   classify_email:
     model: claude-opus-4-8
-    # Covers thinking plus the label and a short reason (was 100, reply-only).
-    max_tokens: 6000
     batch: false             # hourly, low volume, keep it simple
 
 # `cache_profile: true` means the corpus prefix is *cacheable*, not that every

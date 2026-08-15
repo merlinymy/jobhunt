@@ -300,6 +300,12 @@ def complete(
     if effort:
         reasoning["output_config"] = {"effort": str(effort)}
 
+    # No per-task budget to tune: the global `max_tokens` in models.yaml, the
+    # model's max output. Streaming makes a ceiling this large safe, and you are
+    # billed for tokens produced, not for the ceiling, so it never truncates and
+    # costs nothing. A task may still set its own `max_tokens` to cap a runaway.
+    budget = int(settings.get("max_tokens") or routing().get("max_tokens") or 32000)
+
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
     started = time.monotonic()
     try:
@@ -310,7 +316,7 @@ def complete(
         # would, so nothing downstream changes.
         with client.messages.stream(
             model=model,
-            max_tokens=int(settings.get("max_tokens", 2000)),
+            max_tokens=budget,
             system=blocks or anthropic.NOT_GIVEN,
             messages=turns,
             **reasoning,
@@ -351,10 +357,10 @@ def complete(
     # sends you to the prompt when the actual problem is the token budget.
     if message.stop_reason == "max_tokens":
         raise LLMError(
-            f"{task} hit its {settings.get('max_tokens', 2000)}-token budget and the "
-            f"reply is truncated. Raise `max_tokens` for {task!r} in "
-            f"{config.MODELS_YAML.name}, or ask for less in one call. "
-            "Note the budget covers reasoning as well as the reply."
+            f"{task} hit the {budget}-token ceiling and the reply is truncated — "
+            f"that is the model's max output (global `max_tokens` in "
+            f"{config.MODELS_YAML.name}). The fix is to ask for less in one call, "
+            f"not a bigger budget; the ceiling covers reasoning as well as the reply."
         )
     if message.stop_reason == "refusal":
         raise LLMError(
