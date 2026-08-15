@@ -385,8 +385,21 @@ def send(
     *,
     on_progress: Any = None,
 ) -> dict[str, Any]:
-    """One turn. Records both sides and returns the assistant's message."""
-    said = instruction.strip()
+    """One turn. Records both sides and returns the assistant's message.
+
+    Temporarily unavailable under the library engine (Phase 1). This path revises
+    by *rewording* — it replays the tailor exchange and validates the reply against
+    the corpus, which the redesign replaced. Revising a library resume means
+    re-selecting, not rewording, which is a redesign of its own. Until that lands,
+    rebuild the packet to re-select rather than letting this fabricate against an
+    unfed corpus.
+    """
+    raise ChatError(
+        "Resume revision by chat is being rebuilt for the library engine — it "
+        "reworded against the old corpus, which the redesign replaced. Rebuild the "
+        "packet to re-select from the library instead."
+    )
+    said = instruction.strip()  # noqa: unreachable — see the docstring
     if not said:
         raise ChatError("say something first.")
     if len(said) > MAX_MESSAGE_CHARS:
@@ -424,11 +437,15 @@ def apply(
 ) -> None:
     """Render and store a proposal, through the same path a build uses.
 
-    Not a second way to write a resume: this hands the proposal's selection to
-    `tailor` machinery, so the checks run, findings are recomputed, and the
-    overwrite is logged exactly as a rebuild is.
+    Temporarily unavailable under the library engine (Phase 1) for the same reason
+    as `send`: the proposal is a reworded selection validated against the corpus,
+    which the redesign replaced. Rebuild the packet to re-select instead.
     """
-    row = conn.execute(
+    raise ChatError(
+        "Applying a chat revision is being rebuilt for the library engine. "
+        "Rebuild the packet to re-select from the library instead."
+    )
+    row = conn.execute(  # noqa: unreachable — see the docstring
         "SELECT proposal, applied_at FROM packet_chat WHERE id = ? AND application_id = ?",
         (message_id, application_id),
     ).fetchone()

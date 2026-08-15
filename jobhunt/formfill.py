@@ -127,11 +127,16 @@ def build_prompt(
     if row is None:
         raise LookupError("no such application")
     jd = (row["jd_text"] or "").strip()
-    # The only caller that wants stories: "tell us about a time" has no answer in
-    # a bullet, and this is the prompt that gets asked it.
-    corpus, _ = tailor.build_prompt(
-        conn, jd or "(no job description)", limit=None, include_stories=True
-    )
+    # The library (Phase 1) plus the story bank: "tell us about a time" has no
+    # answer in a resume bullet, so the STAR stories are appended. Both are
+    # cacheable and both are quote-only sources — a drafted answer may quote a
+    # library number or a story, never paraphrase a claim into existence.
+    from . import select as select_mod
+
+    corpus = select_mod.library_block(conn)
+    stories = tailor.stories_block(conn)
+    if stories:
+        corpus = f"{corpus}\n\n{stories}"
 
     numbered = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, start=1))
     return corpus, (
@@ -170,11 +175,11 @@ def parse(
     if not isinstance(items, list):
         raise FormError("the reply has no `answers` array")
 
-    # Once for the whole form. This was rebuilt inside the option loop, so a
-    # twelve-question paste with five options each read the entire corpus out of
-    # SQLite and re-scanned it sixty times to answer one question that does not
-    # change between them.
-    allowed = tailor.corpus_numbers(conn)
+    # Once for the whole form. The number source is the library (Phase 1): a
+    # drafted form answer may quote a figure the resume can back and no other.
+    from . import select as select_mod
+
+    allowed = select_mod.library_numbers(conn)
     out: list[Drafted] = []
     for index, question in enumerate(asked):
         item = items[index] if index < len(items) and isinstance(items[index], dict) else {}

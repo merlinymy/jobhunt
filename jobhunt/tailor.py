@@ -1410,38 +1410,55 @@ def build_packet(
             f"Paste one on /tailor, or apply from the master resume."
         )
 
-    # Before tailoring, not after: the point of knowing the posting wants AWS is
-    # to get the nearest supported evidence *onto* the page, which is a selection
-    # decision. Stored, so this is one call on the first build and free on every
-    # rebuild and chat revision.
-    from . import gaps as gaps_mod
+    # The select-from-a-library engine (Phase 1 redesign). The model picks
+    # {variant, bullet_ids, trims}; title and skills are deterministic; the
+    # renderer emits only library/validated strings. On any failure the variant
+    # default is used, so this always produces a document rather than blocking.
+    from pathlib import Path
 
-    try:
-        found_gaps = gaps_mod.analyse(
-            conn, application_id, jd_text=jd, on_progress=on_progress
+    from . import resume
+    from . import select as select_mod
+
+    report: ProgressFn = on_progress or (lambda **_: None)
+    selection = select_mod.select(
+        conn, jd, jd_title=row["title"], application_id=application_id,
+    )
+    report(phase="rendering", message="typesetting the PDF")
+    document = resume.build_selection_document(conn, selection)
+    out_path = config.OUT_DIR / f"packet_{application_id}.pdf"
+    resume.render(document, Path(out_path))
+    pdf_bytes = Path(out_path).read_bytes()
+
+    # Findings for the packet page: the selection's own (e.g. it fell back) plus
+    # any per-bullet note (a trim rejected and kept verbatim).
+    findings = list(selection.findings) + [
+        f"{b.id}: {note}" for b in selection.bullets for note in b.findings
+    ]
+    flagged = f", {len(findings)} to review" if findings else ""
+    summary = f"packet: {len(selection.bullets)} bullets, {len(pdf_bytes):,} bytes{flagged}"
+    with transaction(conn):
+        conn.execute(
+            "UPDATE applications SET resume_pdf = ?, resume_data = ?, "
+            "resume_findings = ?, updated_at = ? WHERE id = ?",
+            (
+                pdf_bytes,
+                json.dumps(document),
+                json.dumps([{"where": "selection", "message": f} for f in findings]),
+                config.utcnow(),
+                application_id,
+            ),
         )
-        gap_block = gaps_mod.prompt_block(found_gaps)
-    except (gaps_mod.GapError, llm.LLMError) as exc:
-        # Never fatal. A resume without the adjacency hint is the resume this
-        # system produced last week; no resume at all is a regression.
-        log_gap_failure(application_id, exc)
-        gap_block = ""
-
-    # strict=False: always produce a document, and hand the objections back for a
-    # human to act on. Every resume here is read and edited before it is sent, so
-    # a rejection that renders nothing costs more than an annotation does.
-    result = tailor(
-        conn,
-        jd,
-        limit=10,
-        application_id=application_id,
-        strict=False,
-        on_progress=on_progress,
-        gap_block=gap_block,
-    )
-    return _store(
-        conn, application_id, result, jd, rebuild=rebuild, on_progress=on_progress
-    )
+        if rebuild:
+            states.log_event(conn, application_id, "note", detail=f"rebuilt {summary}")
+        else:
+            states.transition(conn, application_id, states.PACKET_READY, detail=summary)
+    return {
+        "application_id": application_id,
+        "bullets": len(selection.bullets),
+        "variant": selection.variant,
+        "fell_back": selection.fell_back,
+        "bytes": len(pdf_bytes),
+    }
 
 
 def _store(

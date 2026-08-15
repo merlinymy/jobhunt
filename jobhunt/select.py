@@ -277,6 +277,17 @@ def validate_selection(
 # ============================== model plumbing ==============================
 
 
+def library_numbers(conn: sqlite3.Connection) -> set[str]:
+    """Every number the library states, for the §7 checks the prose surfaces run.
+
+    The library replaces the old corpus as the fact source: a scoring prefix, a
+    gap sentence, or a form answer may quote any figure the resume can back and
+    no other. Same shape as `tailor.corpus_numbers`, over `resume_bullets`.
+    """
+    hay = " ".join(str(b["text"]) for b in queries.resume_bullets(conn))
+    return set(tailor._numbers(hay)) | tailor._spelled_numbers(hay)
+
+
 def library_block(conn: sqlite3.Connection) -> str:
     """The cacheable library the selector reads — byte-identical across calls."""
     lines = ["RESUME LIBRARY", ""]

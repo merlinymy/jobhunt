@@ -71,36 +71,26 @@ def _profile_prefix(conn: sqlite3.Connection) -> str:
     """
     from . import queries
 
-    facts = queries.profile_facts(conn)
+    # Built from the resume library (Phase 1 redesign), not the archived corpus,
+    # so it cannot drift from what the resume actually claims. Everything here is
+    # a library string quoted verbatim — a scoring prefix is a candidate-claim
+    # surface, so it inherits §7: quote, never paraphrase.
     lines = ["CANDIDATE", ""]
-    if facts.get("identity.headline"):
-        lines.append(facts["identity.headline"])
+    lines.append(queries.resume_summaries(conn).get("general", ""))
 
-    for row in queries.corpus_experiences(conn):
-        span = f"{row['start_month']}–{row['end_month'] or 'present'}"
-        lines.append(f"- {row['title']} ({span})")
-        if row["scope"]:
-            lines.append(f"    {row['scope']}")
-    for row in queries.corpus_projects(conn):
-        lines.append(f"- project: {row['name']} — {row['role'] or ''}".rstrip(" —"))
-        if row["blurb"]:
-            lines.append(f"    {str(row['blurb'])[:220]}")
+    lines += ["", "SKILLS"]
+    for group, items in queries.resume_skill_groups(conn):
+        if items:
+            lines.append(f"{group}: {', '.join(items)}")
 
-    tech: list[str] = []
-    for source in (queries.corpus_experiences(conn), queries.corpus_projects(conn)):
-        for row in source:
-            for column in ("tech_built", "tech_owned", "tech_maintained", "tech_touched"):
-                if column in row.keys() and row[column]:
-                    try:
-                        tech.extend(str(item) for item in json.loads(row[column]))
-                    except json.JSONDecodeError:
-                        pass
-    if tech:
-        seen = list(dict.fromkeys(tech))
-        lines += ["", "TECHNOLOGIES", ", ".join(seen)]
+    lines += ["", "EVIDENCE"]
+    for bullet in queries.resume_bullets(conn):
+        if bullet["tier"] != "interview":
+            lines.append(f"- {bullet['text']}")
 
-    for row in queries.corpus_education(conn):
-        lines.append(f"\nEDUCATION\n{row['degree'] or ''} {row['field'] or ''}".rstrip())
+    lines += ["", "EDUCATION"]
+    for edu in queries.resume_education(conn):
+        lines.append(f"{edu['degree']} — {edu['school']} ({edu['date_text']})")
 
     prefix = "\n".join(lines)
     # Refuse rather than score against nothing. An unloaded corpus produces the
