@@ -361,6 +361,22 @@ def _resolve_role(
     return None, None
 
 
+def _resolve_entry_key(role: str, name_map: dict[str, str]) -> str | None:
+    """`**Role:** ARC — retrieval service` -> the library `entry_key` (e.g. ARC).
+
+    Same head-match rule as `_resolve_role`, against the library's entry names
+    (company/name from variant entries plus the swap-in projects) rather than the
+    archived corpus tables. This is what lets a fresh clone attach a story.
+    """
+    head = re.split(r"\s+[—–-]\s+", role.strip(), maxsplit=1)[0].strip().lower()
+    if not head:
+        return None
+    for name, entry_key in name_map.items():
+        if head.startswith(name) or name.startswith(head):
+            return entry_key
+    return None
+
+
 # A drafted story leaves these where a human detail is missing — what someone
 # said, why you looked again. Loading one would put a placeholder in front of a
 # model, and the answer it wrote around that placeholder would be told to an
@@ -438,6 +454,18 @@ def _load_stories(conn: sqlite3.Connection, path: Path) -> int:
             f"  {len(unfinished)} story/stories still have {_UNFILLED}…]] to fill in "
             f"and were not loaded: " + ", ".join(s["title"] for s in unfinished)
         )
+    # Resolve each story to its library entry via `entry_key`. The archived
+    # experiences/projects tables are unfed, so the legacy id columns now resolve
+    # to nothing — entry_key is what a fresh clone attaches a story by. Old
+    # columns still written for whatever data survives; they are not dropped.
+    name_map: dict[str, str] = {}
+    for r in conn.execute("SELECT entry_key, company, name FROM resume_variant_entries"):
+        for nm in (r["company"], r["name"]):
+            if nm:
+                name_map[str(nm).strip().lower()] = r["entry_key"]
+    for r in conn.execute("SELECT entry_key, name FROM resume_swap_entries"):
+        if r["name"]:
+            name_map[str(r["name"]).strip().lower()] = r["entry_key"]
     experiences = {
         str(r["company"]).strip().lower(): int(r["id"])
         for r in conn.execute("SELECT id, company FROM experiences")
@@ -448,34 +476,36 @@ def _load_stories(conn: sqlite3.Connection, path: Path) -> int:
     }
     unattached: list[str] = []
     for story in stories:
-        experience_id, project_id = _resolve_role(
-            story.pop("role", ""), experiences, projects
-        )
-        if experience_id is None and project_id is None:
+        role = story.pop("role", "")
+        experience_id, project_id = _resolve_role(role, experiences, projects)
+        entry_key = _resolve_entry_key(role, name_map)
+        if entry_key is None:
             unattached.append(story["title"])
         conn.execute(
             """
             INSERT INTO stories (title, situation, action, result, tags,
-                                 experience_id, project_id, created_at)
+                                 experience_id, project_id, entry_key, created_at)
             VALUES (:title, :situation, :action, :result, :tags,
-                    :experience_id, :project_id, :created_at)
+                    :experience_id, :project_id, :entry_key, :created_at)
             ON CONFLICT (title) DO UPDATE SET
               situation = excluded.situation, action = excluded.action,
               result = excluded.result, tags = COALESCE(excluded.tags, tags),
               experience_id = excluded.experience_id,
-              project_id = excluded.project_id
+              project_id = excluded.project_id,
+              entry_key = excluded.entry_key
             """,
             {
                 **story,
                 "experience_id": experience_id,
                 "project_id": project_id,
+                "entry_key": entry_key,
                 "created_at": config.utcnow(),
             },
         )
     if unattached:
         print(
-            f"  {len(unattached)} story/stories have a **Role:** matching no experience "
-            f"or project and loaded unattached: " + ", ".join(unattached)
+            f"  {len(unattached)} story/stories have a **Role:** matching no library "
+            f"entry and loaded unattached: " + ", ".join(unattached)
         )
     return len(stories)
 
@@ -656,7 +686,7 @@ def _load_library(conn: sqlite3.Connection, lib: dict[str, Any]) -> dict[str, in
     # ---- write (wholesale replace) ----
     for table in ("resume_variant_entries", "resume_variants", "resume_skills",
                   "resume_skill_groups", "resume_summaries", "resume_bullets",
-                  "resume_education", "resume_meta"):
+                  "resume_education", "resume_meta", "resume_swap_entries"):
         conn.execute(f"DELETE FROM {table}")
 
     for i, b in enumerate(bullets):
@@ -691,6 +721,21 @@ def _load_library(conn: sqlite3.Connection, lib: dict[str, Any]) -> dict[str, in
             "VALUES (?, ?, ?, ?)",
             (str(edu.get("degree", "")), str(edu.get("school", "")),
              str(edu.get("date", "")), ei))
+
+    # Swap-in project entries (peptide, game). Their entry_key must have bullets,
+    # or the selector could swap in a header with nothing under it.
+    known_keys = {_entry_key(bid) for bid in by_id}
+    for se in lib.get("swap_entries") or []:
+        ek = str(se.get("entry_key", "")).strip()
+        if ek not in known_keys:
+            raise ProfileError(
+                f"{RESUME_LIBRARY_FILE}: swap_entry {ek!r} has no bullets in the library"
+            )
+        conn.execute(
+            "INSERT INTO resume_swap_entries (entry_key, kind, name, descr, date_text, "
+            "tech) VALUES (?, ?, ?, ?, ?, ?)",
+            (ek, str(se.get("kind", "project")), str(se.get("name", "")),
+             _opt(se.get("desc")), str(se.get("date", "")), _opt(se.get("tech"))))
 
     # ---- variants + entries + the remaining assertions ----
     for vi, (vname, v) in enumerate(variants.items()):

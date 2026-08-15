@@ -483,6 +483,131 @@ def build_document(
     }
 
 
+# =============================== library render ===============================
+#
+# The renderer for the select-from-a-library engine. It is the last line for the
+# honesty backbone: it composes final strings, so it emits ONLY library and
+# validated-Selection text plus structured fields (identity from facts, education
+# from the library). Nothing is interpolated that could smuggle a claim, no
+# number is reformatted, no descriptor re-derived. If a value is not from the
+# library or the validated Selection, it does not appear.
+
+# entry_key -> the repos_public key that gates that project's link.
+_REPO_KEY = {"ARC": "ARC", "JOB": "jobhunt", "PEP": "peptideDesign", "FPS": "FireProofSheep"}
+
+
+def build_selection_cv(conn: sqlite3.Connection, selection: Any) -> dict[str, Any]:
+    """The RenderCV `cv` mapping from a validated `select.Selection`.
+
+    Bullets are placed under their entry by `entry_key`: variant entries supply
+    the FBT/SIR/ARC/JOB headers, the swap-in table supplies PEP/FPS. Every string
+    here is verbatim from the library or the validated Selection.
+    """
+    facts = queries.profile_facts(conn)
+
+    by_entry: dict[str, list[Any]] = {}
+    order: list[str] = []
+    for bullet in selection.bullets:
+        by_entry.setdefault(bullet.entry_key, []).append(bullet)
+        if bullet.entry_key not in order:
+            order.append(bullet.entry_key)
+
+    sections: dict[str, list[Any]] = {}
+
+    if selection.summary and selection.summary.strip():
+        sections["summary"] = [selection.summary.strip()]
+
+    skill_rows = [
+        {"label": group, "details": ", ".join(items)}
+        for group, items in selection.skills
+        if items
+    ]
+    if skill_rows:
+        sections["skills"] = skill_rows
+
+    # RenderCV's EducationEntry requires `area`; the library carries one combined
+    # degree string ("M.S. in Computer Science"), so it goes in `area` and the
+    # template renders "<school>, <degree>". Verbatim either way.
+    education = [
+        {"institution": e["school"], "area": e["degree"], "date": e["date_text"]}
+        for e in queries.resume_education(conn)
+    ]
+    if education:
+        sections["education"] = education
+
+    variant_entries = queries.resume_variant_entries(conn, selection.variant)
+    swap = queries.resume_swap_entries(conn)
+    by_key = {ve["entry_key"]: ve for ve in variant_entries}
+    repos_public = (queries.resume_meta(conn, "open_facts") or {}).get("repos_public") or {}
+
+    experience_entries = []
+    for ve in variant_entries:
+        if ve["kind"] != "experience":
+            continue
+        chosen = by_entry.get(ve["entry_key"])
+        if not chosen:
+            continue
+        experience_entries.append({
+            "company": ve["company"],
+            "position": ve["role"],
+            "date": ve["date_text"],
+            "highlights": [b.text for b in chosen],
+        })
+    if experience_entries:
+        sections["experience"] = experience_entries
+
+    # Projects: the project entry_keys present in the selection, variant order
+    # first then any swap-ins, capped at two.
+    variant_proj_order = [ve["entry_key"] for ve in variant_entries if ve["kind"] == "project"]
+    present = [k for k in order if k in by_key and by_key[k]["kind"] == "project"] + \
+              [k for k in order if k in swap]
+    ordered = [k for k in variant_proj_order if k in present] + \
+              [k for k in present if k not in variant_proj_order]
+
+    project_entries = []
+    for entry_key in ordered[:2]:
+        chosen = by_entry.get(entry_key)
+        if not chosen:
+            continue
+        header = by_key.get(entry_key) or swap.get(entry_key)
+        if header is None:
+            continue
+        entry: dict[str, Any] = {"name": header["name"], "date": header["date_text"]}
+        # Link gating: strict `is True`. A truthy string ("demo_live_..._broken")
+        # must not print a link; nor does a project with no URL recorded.
+        if repos_public.get(_REPO_KEY.get(entry_key)) is True and header.get("url"):
+            entry["name"] = f"[{header['name']}]({header['url']})"
+        # The one-line descriptor, verbatim. The tech line is deliberately not
+        # duplicated here — the Skills section already carries those keywords.
+        if header.get("descr"):
+            entry["summary"] = str(header["descr"])
+        entry["highlights"] = [b.text for b in chosen]
+        project_entries.append(entry)
+    if project_entries:
+        sections["projects"] = project_entries
+
+    if not sections:
+        raise ResumeError("the selection produced no sections")
+    return {**_header(facts), "sections": _ordered(sections)}
+
+
+def build_selection_document(conn: sqlite3.Connection, selection: Any) -> dict[str, Any]:
+    """The complete RenderCV input for a library selection: content plus format."""
+    return {
+        "cv": build_selection_cv(conn, selection),
+        "design": _DESIGN,
+        "locale": _LOCALE,
+        "settings": {
+            "render_command": {
+                "dont_generate_png": True,
+                "dont_generate_html": True,
+                "dont_generate_markdown": True,
+                "dont_generate_typst": False,
+            }
+        },
+    }
+
+
 # ================================= rendering =================================
 
 

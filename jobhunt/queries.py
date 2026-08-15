@@ -887,6 +887,11 @@ def resume_meta(conn: sqlite3.Connection, key: str) -> Any:
     return _resume_json(row["value"]) if row else None
 
 
+def resume_swap_entries(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Swap-in project entries (PEP/FPS) keyed by entry_key, for the renderer."""
+    return {r["entry_key"]: dict(r) for r in conn.execute("SELECT * FROM resume_swap_entries")}
+
+
 def job_description(conn: sqlite3.Connection, application_id: int) -> sqlite3.Row | None:
     """The whole JD for one application.
 
