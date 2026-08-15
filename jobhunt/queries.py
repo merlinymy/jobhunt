@@ -6,6 +6,7 @@ State writes are not here — they live in states.py, which is the only place
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -807,6 +808,83 @@ def corpus_counts(conn: sqlite3.Connection) -> dict[str, int]:
         "experiences": conn.execute("SELECT COUNT(*) AS n FROM experiences").fetchone()["n"],
         "projects": conn.execute("SELECT COUNT(*) AS n FROM projects").fetchone()["n"],
     }
+
+
+# ============================== resume library ==============================
+# Readers for the select-from-a-library engine (Phase 1). Parallel to corpus_*;
+# the old corpus readers above are untouched until every consumer has moved over.
+
+
+def _resume_json(value: Any) -> Any:
+    """Parse a JSON column, tolerating NULL and malformed content."""
+    try:
+        return json.loads(value) if value else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def resume_bullets(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Every library bullet, JSON columns parsed, keyed usably for the selector."""
+    out: list[dict[str, Any]] = []
+    for row in conn.execute("SELECT * FROM resume_bullets ORDER BY sort_order, id"):
+        d = dict(row)
+        d["framing"] = _resume_json(row["framing"])
+        for key in ("tags", "must_keep", "no_add", "no_upgrade"):
+            d[key] = _resume_json(row[key]) or []
+        out.append(d)
+    return out
+
+
+def resume_variants(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    out = []
+    for row in conn.execute("SELECT * FROM resume_variants ORDER BY sort_order"):
+        d = dict(row)
+        d["skills_order"] = _resume_json(row["skills_order"]) or []
+        out.append(d)
+    return out
+
+
+def resume_variant_entries(conn: sqlite3.Connection, variant: str) -> list[dict[str, Any]]:
+    out = []
+    for row in conn.execute(
+        "SELECT * FROM resume_variant_entries WHERE variant = ? ORDER BY sort_order",
+        (variant,),
+    ):
+        d = dict(row)
+        d["default_bullets"] = _resume_json(row["default_bullets"]) or []
+        out.append(d)
+    return out
+
+
+def resume_summaries(conn: sqlite3.Connection) -> dict[str, str]:
+    return {r["key"]: r["text"] for r in conn.execute("SELECT key, text FROM resume_summaries")}
+
+
+def resume_skill_groups(conn: sqlite3.Connection) -> list[tuple[str, list[str]]]:
+    """Grouped skills in order: `[(group_name, [skill, ...]), ...]`."""
+    out: list[tuple[str, list[str]]] = []
+    for group in conn.execute("SELECT name FROM resume_skill_groups ORDER BY sort_order"):
+        skills = [
+            r["skill"]
+            for r in conn.execute(
+                "SELECT skill FROM resume_skills WHERE group_name = ? ORDER BY sort_order",
+                (group["name"],),
+            )
+        ]
+        out.append((group["name"], skills))
+    return out
+
+
+def resume_education(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM resume_education ORDER BY sort_order")]
+
+
+def resume_meta(conn: sqlite3.Connection, key: str) -> Any:
+    """A structured config value the library carries — title_default, open_facts,
+    optional_education_line, gpa — parsed from JSON. None when absent."""
+    row = conn.execute("SELECT value FROM resume_meta WHERE key = ?", (key,)).fetchone()
+    return _resume_json(row["value"]) if row else None
 
 
 def job_description(conn: sqlite3.Connection, application_id: int) -> sqlite3.Row | None:

@@ -34,6 +34,15 @@ rates:
 # handing back half a JSON object.
 
 tasks:
+  select:
+    # The library selection call (Phase 1 redesign): emits {variant, bullet_ids,
+    # trims} only — it picks from pre-approved lines, it does not compose, so it
+    # runs below the tailor tier. Sonnet to start; raise to opus if selection
+    # quality needs it. Title and skills are deterministic post-processing in
+    # select.py, never model output. The library block is cached every call.
+    model: claude-sonnet-5
+    max_tokens: 4000
+    cache_profile: true
   tailor:
     model: claude-opus-5     # quality-critical, ~100 calls/mo, drives callbacks
     # 2000 truncated at the dashboard's own limit ceiling of 30 bullets, and a
