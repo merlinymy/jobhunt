@@ -50,6 +50,23 @@ class SelectError(RuntimeError):
     """The selection could not be produced or validated."""
 
 
+# `.docx`-on-request keys off the JD's explicit instruction, not a guess: a
+# posting that says to submit a Word document. Deterministic — a phrase match,
+# never inferred. (Staged with the docx path; not host-verified — see §11.)
+_DOCX_REQUEST = re.compile(
+    r"\.docx\b"                                              # a literal .docx
+    r"|(?:submit|send|upload|provide|attach)[^.]{0,40}\bword\b"
+    r"|\bword\s+(?:doc(?:ument)?|format)\b"
+    r"|\bms\s*word\b|\bin\s+word\b",
+    re.I,
+)
+
+
+def jd_wants_docx(jd_text: str) -> bool:
+    """True iff the posting explicitly asks for a .docx / Word document."""
+    return bool(_DOCX_REQUEST.search(jd_text or ""))
+
+
 @dataclass
 class SelectedBullet:
     id: str

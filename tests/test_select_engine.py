@@ -174,6 +174,14 @@ check(_total > 0 and _attached == _total,
       f"stories: fresh clone resolves all {_total} by entry_key, none unattached")
 
 
+# ---------------------------------- .docx-on-request keys off the JD field ---
+# (Phase 2, deterministic; the docx->soffice PDF path itself is host-verified.)
+check(S.jd_wants_docx("submit your resume as a .docx") and S.jd_wants_docx("Upload a Word document"),
+      "docx-on-request: explicit .docx / Word request detected")
+check(not S.jd_wants_docx("We need a PDF resume") and not S.jd_wants_docx("a wordsmith"),
+      "docx-on-request: no false positive (PDF / 'wordsmith')")
+
+
 # ---------------------------------------------------------------- report ---
 
 _passed = sum(1 for ok, _ in RESULTS if ok)

@@ -1,0 +1,11 @@
+-- The .docx master bytes for a built packet (Phase 2, staged).
+--
+-- Additive, like 018/019: a fresh clone and an existing DB both load clean
+-- whether or not LibreOffice is ever installed. Nothing dropped.
+--
+-- build_packet renders this .docx master on every build (python-docx, no host
+-- dependency) and stores it here, so `.docx`-on-request is served from frozen
+-- bytes — the same freeze rule as resume_pdf. The submission PDF is still derived
+-- from RenderCV by default; the docx -> soffice PDF path is staged behind a flag
+-- and NOT yet host-verified (see docs/resume-redesign.md §11).
+ALTER TABLE applications ADD COLUMN resume_docx BLOB;

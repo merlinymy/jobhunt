@@ -1336,6 +1336,13 @@ class NoJobDescription(TailorError):
 # false, and made every prompt edit unevaluable against a job already approved.
 BUILDABLE_STATES = frozenset({states.JOB_APPROVED, states.PACKET_READY})
 
+# The submission-PDF source. False = RenderCV (the working default). Flip to True
+# ONLY after the docx -> soffice -> PDF path is verified on a host with
+# LibreOffice: work-auth line present in the packet's actual PDF, copy-paste order
+# verified on that PDF, `.docx`-on-request honored. Until then the docx -> soffice
+# branch in build_packet is staged and NOT host-verified. See docs/resume-redesign.md §11.
+DOCX_SUBMISSION_PDF = False
+
 
 def log_gap_failure(application_id: int, exc: Exception) -> None:
     """A failed gap analysis is a missing improvement, not a broken build."""
@@ -1419,29 +1426,49 @@ def build_packet(
     from . import resume
     from . import select as select_mod
 
+    from . import docx_render
+
     report: ProgressFn = on_progress or (lambda **_: None)
     selection = select_mod.select(
         conn, jd, jd_title=row["title"], application_id=application_id,
     )
     report(phase="rendering", message="typesetting the PDF")
-    document = resume.build_selection_document(conn, selection)
-    out_path = config.OUT_DIR / f"packet_{application_id}.pdf"
-    resume.render(document, Path(out_path))
-    pdf_bytes = Path(out_path).read_bytes()
 
-    # Findings for the packet page: the selection's own (e.g. it fell back) plus
-    # any per-bullet note (a trim rejected and kept verbatim).
+    # The .docx master is rendered on every build (python-docx, no host
+    # dependency) and stored, so `.docx`-on-request serves frozen bytes.
+    docx_bytes = docx_render.build_docx(conn, selection)
+
+    # The submission PDF. RenderCV is the working default and stays so; the
+    # docx -> soffice PDF path (which carries the §8 work-auth line) is staged
+    # behind DOCX_SUBMISSION_PDF and gated on LibreOffice. It does NOT auto-engage
+    # when soffice happens to be present — the flip to docx-as-default is a
+    # deliberate one-line change (this constant) after the host run passes.
+    #
+    # !! NOT HOST-VERIFIED: the docx -> soffice PDF branch has never run in CI or
+    # here (no LibreOffice). Closure condition in docs/resume-redesign.md §11.
+    document = resume.build_selection_document(conn, selection)
+    if DOCX_SUBMISSION_PDF and docx_render.find_soffice():
+        pdf_bytes = docx_render.docx_to_pdf(docx_bytes)  # staged, unverified
+        pdf_source = "docx->soffice"
+    else:
+        out_path = config.OUT_DIR / f"packet_{application_id}.pdf"
+        resume.render(document, Path(out_path))
+        pdf_bytes = Path(out_path).read_bytes()
+        pdf_source = "rendercv"
+
     findings = list(selection.findings) + [
         f"{b.id}: {note}" for b in selection.bullets for note in b.findings
     ]
     flagged = f", {len(findings)} to review" if findings else ""
-    summary = f"packet: {len(selection.bullets)} bullets, {len(pdf_bytes):,} bytes{flagged}"
+    summary = (f"packet: {len(selection.bullets)} bullets, {len(pdf_bytes):,} bytes "
+               f"({pdf_source}){flagged}")
     with transaction(conn):
         conn.execute(
-            "UPDATE applications SET resume_pdf = ?, resume_data = ?, "
+            "UPDATE applications SET resume_pdf = ?, resume_docx = ?, resume_data = ?, "
             "resume_findings = ?, updated_at = ? WHERE id = ?",
             (
                 pdf_bytes,
+                docx_bytes,
                 json.dumps(document),
                 json.dumps([{"where": "selection", "message": f} for f in findings]),
                 config.utcnow(),
@@ -1458,6 +1485,7 @@ def build_packet(
         "variant": selection.variant,
         "fell_back": selection.fell_back,
         "bytes": len(pdf_bytes),
+        "pdf_source": pdf_source,
     }
 
 

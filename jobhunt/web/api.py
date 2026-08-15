@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from .. import (
     answers, config, db, formfill, gaps, llm, packet_chat, prompts, queries, resume,
-    runs, tailor,
+    runs, select, tailor,
 )
 from ..normalize import UnparseableURL, detect_ats, normalize_apply_url
 from . import actions, runner, views
@@ -399,6 +399,7 @@ def _packet_payload(
     # versus analysed and nothing missing — so the distinction is kept rather
     # than collapsed, but it does not need two round trips to make.
     found_gaps = gaps.stored(conn, application_id)
+    _jd_row = queries.job_description(conn, application_id)
     # The live packet run, if there is one. The lock is global to the task, so
     # this may be the `job_approved` batch rather than this row — which is still
     # the honest answer to "why is the button refusing", and the phase says which.
@@ -417,6 +418,11 @@ def _packet_payload(
         "form_answers": [d.as_dict() for d in formfill.stored(conn, application_id)],
         "gaps_analysed": found_gaps is not None,
         "messages": packet_chat.messages(conn, application_id),
+        # `.docx`-on-request: the master exists, and whether the posting explicitly
+        # asked for it (the structured JD field, not a guess). Surfaced so the page
+        # can offer the .docx when it is wanted.
+        "has_docx": queries.resume_docx_bytes(conn, application_id) is not None,
+        "jd_wants_docx": select.jd_wants_docx((_jd_row["jd_text"] if _jd_row else "") or ""),
         "error": error,
     }
 
@@ -591,6 +597,19 @@ def packet_resume(conn: Conn, application_id: int) -> Response:
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="resume_{application_id}.pdf"'},
+    )
+
+
+@router.get("/packet/{application_id}/resume.docx")
+def packet_resume_docx(conn: Conn, application_id: int) -> Response:
+    """The stored .docx master, for `.docx`-on-request. Frozen bytes, not a re-render."""
+    docx = queries.resume_docx_bytes(conn, application_id)
+    if docx is None:
+        raise HTTPException(404, "no .docx master built for this application")
+    return Response(
+        content=docx,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="resume_{application_id}.docx"'},
     )
 
 

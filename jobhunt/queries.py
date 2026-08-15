@@ -802,6 +802,14 @@ def resume_pdf_bytes(conn: sqlite3.Connection, application_id: int) -> bytes | N
     return None if row is None else row["resume_pdf"]
 
 
+def resume_docx_bytes(conn: sqlite3.Connection, application_id: int) -> bytes | None:
+    """The stored .docx master bytes, for `.docx`-on-request. Frozen, never re-rendered."""
+    row = conn.execute(
+        "SELECT resume_docx FROM applications WHERE id = ?", (application_id,)
+    ).fetchone()
+    return None if row is None else row["resume_docx"]
+
+
 def corpus_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         "bullets": conn.execute("SELECT COUNT(*) AS n FROM bullets").fetchone()["n"],
