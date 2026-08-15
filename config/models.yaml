@@ -1,7 +1,18 @@
 # Model routing. Change a value here, not a call site — llm.py reads this.
-# Measured cost at ~100 applications/month: all-opus ~$14, haiku-bulk mixed ~$8.
+# Every task runs Opus 4.8 with maximum-effort adaptive thinking (set below).
+# Cost note: all-opus was ~$14/mo; max-effort thinking bills reasoning tokens as
+# output, so expect materially more — the bulk `score`/`classify_email` tasks
+# (~700 calls/mo) are the biggest movers now that they reason too. A task can set
+# `thinking: off` to opt back out if that trade isn't worth it there.
 
 provider: anthropic          # anthropic | ollama  (ollama unimplemented; see note below)
+
+# Reasoning, applied to every task (a task may override either key). Opus 4.8
+# takes adaptive thinking only — `budget_tokens` is rejected with a 400 — and the
+# depth is set by effort, where `max` spends the most on reasoning: quality over
+# cost. Thinking blocks return as separate content parts, so no parser changes.
+thinking: adaptive           # adaptive | off
+effort: max                  # low | medium | high | xhigh | max
 
 # $/million tokens. The API does not return a price, so `llm_calls.cost_usd` is
 # reconstructed from these. They used to live in a dict in llm.py alongside a
@@ -12,6 +23,9 @@ provider: anthropic          # anthropic | ollama  (ollama unimplemented; see no
 # A model routed above but missing here is refused before the call is made.
 # Logging $0.00 for it would be worse: the spend just disappears.
 rates:
+  claude-opus-4-8:
+    input: 5.0
+    output: 25.0
   claude-opus-5:
     input: 5.0
     output: 25.0
@@ -25,8 +39,8 @@ rates:
     input: 1.0
     output: 5.0
 
-# Sizing max_tokens: on Opus 5 the budget covers reasoning *and* the reply, and
-# reasoning is on by default. A budget sized from the visible output alone will
+# Sizing max_tokens: with adaptive thinking enabled (above) the budget covers
+# reasoning *and* the reply. A budget sized from the visible output alone will
 # truncate. Leaving reasoning off is not the fix — with it disabled the model
 # sometimes writes <thinking> tags into the response, which breaks any caller
 # parsing JSON out of it. Budget generously instead; you are billed for tokens
@@ -40,11 +54,11 @@ tasks:
     # runs below the tailor tier. Sonnet to start; raise to opus if selection
     # quality needs it. Title and skills are deterministic post-processing in
     # select.py, never model output. The library block is cached every call.
-    model: claude-sonnet-5
+    model: claude-opus-4-8
     max_tokens: 4000
     cache_profile: true
   tailor:
-    model: claude-opus-5     # quality-critical, ~100 calls/mo, drives callbacks
+    model: claude-opus-4-8     # quality-critical, ~100 calls/mo, drives callbacks
     # 2000 truncated at the dashboard's own limit ceiling of 30 bullets, and a
     # 10-bullet call already used 1562. 30 long bullets plus reasoning needs
     # roughly 5k; 8000 leaves room for a corpus that keeps growing.
@@ -60,7 +74,7 @@ tasks:
     # Opus finds plausible enough to pass. This is the cheapest decorrelation
     # available, and the reason not to "save a call" by asking Opus to check
     # itself in the same reply.
-    model: claude-sonnet-5
+    model: claude-opus-4-8
     # 2000 was sized from the JSON reply alone — about 400 tokens — and truncated
     # on the first real packet, which is exactly the mistake the note above this
     # block describes. The budget covers reasoning too, and this task reasons per
@@ -79,7 +93,7 @@ tasks:
     # The output is the largest of any task here: five answers times however many
     # boxes the form has. 12000 is sized for a long form, and you are billed for
     # what is produced, not for the ceiling.
-    model: claude-opus-5
+    model: claude-opus-4-8
     max_tokens: 12000
     cache_profile: true
   gaps:
@@ -92,7 +106,7 @@ tasks:
     # across reboots" is the honest answer to a posting asking for AWS is exactly
     # the reasoning a cheaper tier flattens into keyword overlap. A weak answer
     # here is worse than none — it puts a stretch in front of an interviewer.
-    model: claude-opus-5
+    model: claude-opus-4-8
     # 4000 truncated on the first real posting. The budget covers reasoning, and
     # this task reasons per gap: each one is a pass over the whole corpus asking
     # "is there anything adjacent to this", before a word of the reply is
@@ -115,24 +129,25 @@ tasks:
     # which is what keeps the output-token comparison in prompts/README.md
     # honest.
     system_prompt: prompts/tailor.md
-    model: claude-opus-5
+    model: claude-opus-4-8
     max_tokens: 8000         # emits a full resume plus reasoning, same as tailor
     cache_profile: true      # same corpus every turn, byte-identical
   narrative:
-    model: claude-opus-5     # "why this company"; cached per company after first call
+    model: claude-opus-4-8     # "why this company"; cached per company after first call
     max_tokens: 4000         # same reasoning-shares-the-budget rule as tailor
     cache_profile: true
   score:
-    model: claude-haiku-4-5-20251001   # ~600 calls/mo, I review the ranking anyway
-    # Haiku 4.5 does not reason unless asked, so this budget is the reply only.
-    # Still tight for a score plus a sentence of reasoning — revisit when Phase 4
-    # lands and there is real output to measure.
-    max_tokens: 200
+    model: claude-opus-4-8   # ~600 calls/mo, I review the ranking anyway
+    # Reasons at max effort now like every task, so the budget must cover thinking
+    # plus the score and its sentence — 200 (the old Haiku reply-only budget) would
+    # truncate on the thinking alone. Billed for tokens produced, not the ceiling.
+    max_tokens: 4000
     cache_profile: true
     batch: true              # not latency-sensitive; runs before the 8am digest
   classify_email:
-    model: claude-haiku-4-5-20251001
-    max_tokens: 100
+    model: claude-opus-4-8
+    # Covers thinking plus the label and a short reason (was 100, reply-only).
+    max_tokens: 2000
     batch: false             # hourly, low volume, keep it simple
 
 # `cache_profile: true` means the corpus prefix is *cacheable*, not that every

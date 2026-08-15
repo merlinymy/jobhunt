@@ -287,6 +287,19 @@ def complete(
             turns.append({"role": role, "content": content})
     turns.append({"role": "user", "content": prompt})
 
+    # Reasoning config from models.yaml; a per-task key overrides the global one.
+    # Opus 4.8 takes adaptive thinking only — `budget_tokens` is rejected with a
+    # 400 — and effort sets the depth (`max` reasons hardest). Thinking arrives as
+    # separate content parts, so the `type == "text"` extraction below is already
+    # correct; `max_tokens` covers thinking *and* the reply (see models.yaml).
+    reasoning: dict[str, Any] = {}
+    think = settings.get("thinking", routing().get("thinking"))
+    if think and str(think).lower() != "off":
+        reasoning["thinking"] = {"type": "adaptive"}
+    effort = settings.get("effort", routing().get("effort"))
+    if effort:
+        reasoning["output_config"] = {"effort": str(effort)}
+
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
     started = time.monotonic()
     try:
@@ -295,6 +308,7 @@ def complete(
             max_tokens=int(settings.get("max_tokens", 2000)),
             system=blocks or anthropic.NOT_GIVEN,
             messages=turns,
+            **reasoning,
         )
     except Exception as exc:
         _log(
