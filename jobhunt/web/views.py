@@ -379,37 +379,63 @@ def fill_view(conn: sqlite3.Connection) -> dict[str, Any]:
         if facts.get(key)
     ]
 
-    by_experience: dict[int, list[sqlite3.Row]] = {}
-    by_project: dict[int, list[sqlite3.Row]] = {}
-    for row in queries.corpus_bullets(conn):
-        if row["experience_id"] is not None:
-            by_experience.setdefault(int(row["experience_id"]), []).append(row)
-        else:
-            by_project.setdefault(int(row["project_id"]), []).append(row)
+    # Repointed to the resume library (Phase 1): the general variant is the
+    # reference resume for manual form-fill. Dates are omitted rather than
+    # date_forms objects — the library is year-level by design (§9), so it cannot
+    # feed the /fill multi-format month-precision date helper. Reconciling that
+    # (a month-precision source, or year-level display on /fill) is a flagged
+    # follow-up; content comes from the library so the page is not empty.
+    bullet_text = {b["id"]: b["text"] for b in queries.resume_bullets(conn)}
 
+    def described(ids: list[str]) -> tuple[list[str], str]:
+        items = [bullet_text[i] for i in ids if i in bullet_text]
+        return items, "\n".join(f"• {t}" for t in items)
+
+    entries = queries.resume_variant_entries(conn, "general")
     experiences = []
-    for row in queries.corpus_experiences(conn):
-        items, block = _described(by_experience.get(int(row["id"]), []))
+    for entry in entries:
+        if entry["kind"] != "experience":
+            continue
+        items, block = described(entry["default_bullets"])
         experiences.append({
-            "company": row["company"], "title": row["title"],
-            "location": row["location"], "employment_type": row["employment_type"],
-            "start": date_forms(row["start_month"]), "end": date_forms(row["end_month"]),
+            "company": entry["company"], "title": entry["role"],
+            "location": None, "employment_type": None,
+            "start": None, "end": None, "date": entry["date_text"],
             "bullets": items, "description": block,
         })
 
+    # Bullets by entry, for the swap-in projects that carry no variant default.
+    by_key: dict[str, list[str]] = {}
+    for b in queries.resume_bullets(conn):
+        if b["tier"] != "interview":
+            by_key.setdefault(b["entry_key"], []).append(b["id"])
+
     projects = []
-    for row in queries.corpus_projects(conn):
-        items, block = _described(by_project.get(int(row["id"]), []))
+    seen: set[str] = set()
+    for entry in entries:
+        if entry["kind"] != "project":
+            continue
+        seen.add(entry["entry_key"])
+        items, block = described(entry["default_bullets"])
         projects.append({
-            "name": row["name"], "url": row["url"], "role": row["role"],
-            "start": date_forms(row["start_month"]), "end": date_forms(row["end_month"]),
+            "name": entry["name"], "url": None, "role": None,
+            "start": None, "end": None, "date": entry["date_text"],
+            "bullets": items, "description": block,
+        })
+    for entry_key, entry in queries.resume_swap_entries(conn).items():
+        if entry["kind"] != "project" or entry_key in seen:
+            continue
+        items, block = described(by_key.get(entry_key, []))
+        projects.append({
+            "name": entry["name"], "url": None, "role": entry["descr"],
+            "start": None, "end": None, "date": entry["date_text"],
             "bullets": items, "description": block,
         })
 
     education = [
-        {"school": row["school"], "degree": row["degree"], "field": row["field"],
-         "start": date_forms(row["start_month"]), "end": date_forms(row["end_month"])}
-        for row in queries.corpus_education(conn)
+        {"school": row["school"], "degree": row["degree"], "field": None,
+         "start": None, "end": None, "date": row["date_text"]}
+        for row in queries.resume_education(conn)
     ]
 
     return {"identity": identity, "experiences": experiences,

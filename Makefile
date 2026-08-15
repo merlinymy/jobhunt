@@ -73,6 +73,7 @@ check-web:  ## eslint + tsc on the frontend
 test: $(PY)  ## the table-driven suites (standalone scripts, not pytest)
 	$(PY) tests/test_url_normalization.py
 	$(PY) tests/test_tailoring_validator.py
+	$(PY) tests/test_select_engine.py
 
 test-live: $(PY)  ## score the model checker against the adversarial fixtures (costs cents)
 	$(PY) tests/test_tailoring_validator.py --live
