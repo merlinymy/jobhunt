@@ -34,7 +34,8 @@ from . import config, queries
 from .db import connect, transaction
 
 FACTS_FILE = "facts.yaml"
-EXPERIENCE_FILE = "experience.yaml"
+EXPERIENCE_FILE = "experience.yaml"           # archived to experience.raw.yaml; optional now
+RESUME_LIBRARY_FILE = "resume_library.yaml"   # the select-from-a-library source (Phase 1)
 
 # Both are read, and both are optional. `Connections.csv` is LinkedIn's own
 # export filename, kept as-downloaded so re-exporting is a drag-and-drop rather
@@ -93,6 +94,11 @@ def _blank(value: Any) -> bool:
 
 def _text(row: dict[str, Any], key: str) -> str | None:
     value = row.get(key)
+    return None if _blank(value) else str(value).strip()
+
+
+def _opt(value: Any) -> str | None:
+    """A scalar YAML value as a stripped string, or None when blank."""
     return None if _blank(value) else str(value).strip()
 
 
@@ -586,6 +592,176 @@ def _prune_bullets(
     return cursor.rowcount
 
 
+# ============================== resume library ==============================
+#
+# The select-from-a-library engine's source (Phase 1 of the redesign). Loaded
+# wholesale — DELETE then INSERT — rather than upserted: the library is small,
+# authored as one document, and a stale row the YAML no longer mentions would be
+# a bullet the tailor could still select. The assertions below are the dry-run
+# checks made load-bearing; each raises rather than warns.
+
+_FRAMING_VOCAB = frozenset({"general", "fullstack", "backend", "any"})
+
+
+def _entry_key(bullet_id: str) -> str:
+    """The role/project a bullet renders under: the id prefix before the first '-'."""
+    return bullet_id.split("-", 1)[0]
+
+
+def _load_library(conn: sqlite3.Connection, lib: dict[str, Any]) -> dict[str, int]:
+    bullets = lib.get("bullets") or []
+    summaries = lib.get("summaries") or {}
+    skills_master = lib.get("skills_master") or {}
+    variants = lib.get("variants") or {}
+    education = lib.get("education") or []
+    if not bullets:
+        raise ProfileError(f"{RESUME_LIBRARY_FILE}: no `bullets`")
+    if not variants:
+        raise ProfileError(f"{RESUME_LIBRARY_FILE}: no `variants`")
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for b in bullets:
+        bid = str(b.get("id") or "").strip()
+        if not bid:
+            raise ProfileError(f"{RESUME_LIBRARY_FILE}: a bullet has no id")
+        if bid in by_id:
+            raise ProfileError(f"{RESUME_LIBRARY_FILE}: duplicate bullet id {bid!r}")
+        by_id[bid] = b
+
+    # ---- per-bullet assertions ----
+    for bid, b in by_id.items():
+        fr = b.get("framing")
+        vals = [fr] if isinstance(fr, str) else list(fr or [])
+        outside = [v for v in vals if v not in _FRAMING_VOCAB]
+        if outside:
+            raise ProfileError(
+                f"{RESUME_LIBRARY_FILE}: bullet {bid} framing {outside} outside "
+                f"{sorted(_FRAMING_VOCAB)} — domain tokens belong in `tags`"
+            )
+        text = str(b.get("text") or "")
+        for phrase in b.get("must_keep") or []:
+            if str(phrase) not in text:
+                raise ProfileError(
+                    f"{RESUME_LIBRARY_FILE}: bullet {bid} must_keep {phrase!r} is not "
+                    f"verbatim in its text — a dead guard"
+                )
+        if str(b.get("claim_safety") or "").strip() and not (
+            b.get("must_keep") or b.get("no_add") or b.get("no_upgrade")
+        ):
+            raise ProfileError(
+                f"{RESUME_LIBRARY_FILE}: bullet {bid} has a claim_safety flag but no "
+                f"guard (must_keep/no_add/no_upgrade) — an unenforced honesty flag"
+            )
+
+    # ---- write (wholesale replace) ----
+    for table in ("resume_variant_entries", "resume_variants", "resume_skills",
+                  "resume_skill_groups", "resume_summaries", "resume_bullets",
+                  "resume_education", "resume_meta"):
+        conn.execute(f"DELETE FROM {table}")
+
+    for i, b in enumerate(bullets):
+        bid = str(b["id"]).strip()
+        conn.execute(
+            "INSERT INTO resume_bullets (id, entry_key, claim_group, framing, tier, "
+            "is_lead_candidate, tags, claim_safety, must_keep, no_add, no_upgrade, "
+            "text, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (bid, _entry_key(bid), str(b.get("claim_group") or ""),
+             json.dumps(b.get("framing")), str(b.get("tier")),
+             int(bool(b.get("is_lead_candidate"))), json.dumps(b.get("tags") or []),
+             _opt(b.get("claim_safety")), json.dumps(b.get("must_keep") or []),
+             json.dumps(b.get("no_add") or []), json.dumps(b.get("no_upgrade") or []),
+             str(b["text"]).strip(), i),
+        )
+
+    for key, text in summaries.items():
+        conn.execute("INSERT INTO resume_summaries (key, text) VALUES (?, ?)",
+                     (str(key), str(text).strip()))
+
+    for gi, (group, items) in enumerate(skills_master.items()):
+        conn.execute("INSERT INTO resume_skill_groups (name, sort_order) VALUES (?, ?)",
+                     (str(group), gi))
+        for si, skill in enumerate(items or []):
+            conn.execute(
+                "INSERT INTO resume_skills (group_name, skill, sort_order) VALUES (?, ?, ?)",
+                (str(group), str(skill), si))
+
+    for ei, edu in enumerate(education):
+        conn.execute(
+            "INSERT INTO resume_education (degree, school, date_text, sort_order) "
+            "VALUES (?, ?, ?, ?)",
+            (str(edu.get("degree", "")), str(edu.get("school", "")),
+             str(edu.get("date", "")), ei))
+
+    # ---- variants + entries + the remaining assertions ----
+    for vi, (vname, v) in enumerate(variants.items()):
+        if str(v.get("summary_key")) not in summaries:
+            raise ProfileError(
+                f"{RESUME_LIBRARY_FILE}: variant {vname} summary_key "
+                f"{v.get('summary_key')!r} has no summary"
+            )
+        conn.execute(
+            "INSERT INTO resume_variants (name, title_default, summary_key, "
+            "skills_order, sort_order) VALUES (?, ?, ?, ?, ?)",
+            (str(vname), str(v.get("title", "")), str(v.get("summary_key", "")),
+             json.dumps(v.get("skills_order") or []), vi))
+        entries = [("experience", e) for e in (v.get("experience") or [])] + \
+                  [("project", e) for e in (v.get("projects") or [])]
+        variant_ids: list[str] = []
+        for si, (kind, e) in enumerate(entries):
+            ids = [str(x) for x in (e.get("bullets") or [])]
+            missing = [x for x in ids if x not in by_id]
+            if missing:
+                raise ProfileError(
+                    f"{RESUME_LIBRARY_FILE}: variant {vname} entry references unknown "
+                    f"bullet(s) {missing}"
+                )
+            prefixes = {_entry_key(x) for x in ids}
+            if len(prefixes) != 1:
+                raise ProfileError(
+                    f"{RESUME_LIBRARY_FILE}: variant {vname} entry mixes entry_keys "
+                    f"{sorted(prefixes)} — one entry is one role/project"
+                )
+            entry_key = prefixes.pop()
+            if not any(by_id[x].get("is_lead_candidate") for x in ids):
+                raise ProfileError(
+                    f"{RESUME_LIBRARY_FILE}: variant {vname} {kind} {entry_key} defaults "
+                    f"no is_lead_candidate bullet to open with"
+                )
+            interview = [x for x in ids if by_id[x].get("tier") == "interview"]
+            if interview:
+                raise ProfileError(
+                    f"{RESUME_LIBRARY_FILE}: variant {vname} defaults interview-tier "
+                    f"bullet(s) {interview}"
+                )
+            variant_ids += ids
+            conn.execute(
+                "INSERT INTO resume_variant_entries (variant, sort_order, kind, "
+                "entry_key, company, role, name, descr, date_text, tech, "
+                "default_bullets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(vname), si, kind, entry_key, _opt(e.get("company")),
+                 _opt(e.get("role")), _opt(e.get("name")), _opt(e.get("desc")),
+                 str(e.get("date", "")), _opt(e.get("tech")), json.dumps(ids)))
+        groups = [by_id[x].get("claim_group") for x in variant_ids]
+        dup = sorted({g for g in groups if groups.count(g) > 1})
+        if dup:
+            raise ProfileError(
+                f"{RESUME_LIBRARY_FILE}: variant {vname} defaults two bullets from the "
+                f"same claim_group(s) {dup} — a resume shows at most one per group"
+            )
+
+    for key in ("title_default", "open_facts", "optional_education_line", "gpa"):
+        if key in lib:
+            conn.execute("INSERT INTO resume_meta (key, value) VALUES (?, ?)",
+                         (key, json.dumps(lib[key])))
+
+    return {
+        "resume_bullets": len(bullets),
+        "resume_variants": len(variants),
+        "resume_summaries": len(summaries),
+        "resume_education": len(education),
+    }
+
+
 # =================================== load ===================================
 
 
@@ -595,11 +771,18 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
     # Parse everything before writing anything: a malformed second file must not
     # leave the first one half-imported.
     facts = _read_yaml(profile_dir / FACTS_FILE) or {}
-    corpus = _read_yaml(profile_dir / EXPERIENCE_FILE) or {}
+    # experience.yaml is archived to experience.raw.yaml in the redesign. When it
+    # is gone the old-corpus load below is skipped (empty lists) and the resume
+    # library is the source; the old tables are left as-is, never dropped here.
+    exp_path = profile_dir / EXPERIENCE_FILE
+    corpus = _read_yaml(exp_path) if exp_path.exists() else {}
+    lib = _read_yaml(profile_dir / RESUME_LIBRARY_FILE) or {}
     if not isinstance(facts, dict):
         raise ProfileError(f"{FACTS_FILE}: expected a mapping at the top level")
     if not isinstance(corpus, dict):
         raise ProfileError(f"{EXPERIENCE_FILE}: expected a mapping at the top level")
+    if not isinstance(lib, dict):
+        raise ProfileError(f"{RESUME_LIBRARY_FILE}: expected a mapping at the top level")
 
     corpus_path = profile_dir / EXPERIENCE_FILE
     experiences = _expect_list(corpus.get("experiences"), corpus_path, "experiences")
@@ -769,6 +952,10 @@ def load(conn: sqlite3.Connection, *, prune: bool = False) -> dict[str, int]:
             )
         counts["languages"] = len(seen_languages)
 
+        # The resume library — the new source of truth for resume content. Runs
+        # in the same transaction, so a failed assertion rolls the whole load back.
+        counts.update(_load_library(conn, lib))
+
         counts["answers"] = _load_fact_answers(conn, facts)
         counts["stories"] = _load_stories(conn, profile_dir / "stories.md")
         counts["pitch"] = _load_pitch(conn, profile_dir / "stories.md")
@@ -862,6 +1049,8 @@ def main(argv: list[str] | None = None) -> int:
     order = ("facts", "experiences", "projects", "bullets", "education", "credentials",
              "languages", "contacts", "answers", "stories")
     print(" · ".join(f"{counts[name]} {name}" for name in order))
+    lib_order = ("resume_bullets", "resume_variants", "resume_summaries", "resume_education")
+    print("library: " + " · ".join(f"{counts.get(name, 0)} {name}" for name in lib_order))
     # Worth seeing: LinkedIn withholds the name on a sizeable share of an export
     # (a closed or restricted account), and a contact with no name can never be
     # asked for a referral. A number that jumps means the export is degrading.
