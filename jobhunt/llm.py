@@ -303,13 +303,19 @@ def complete(
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
     started = time.monotonic()
     try:
-        message = client.messages.create(
+        # Streamed, not a plain create: with max-effort thinking the budget covers
+        # reasoning as well as the reply, so max_tokens runs large (form answers
+        # need ~24k), and the SDK refuses a non-streaming request it estimates will
+        # exceed ~10 minutes. get_final_message() returns the same Message a create
+        # would, so nothing downstream changes.
+        with client.messages.stream(
             model=model,
             max_tokens=int(settings.get("max_tokens", 2000)),
             system=blocks or anthropic.NOT_GIVEN,
             messages=turns,
             **reasoning,
-        )
+        ) as stream:
+            message = stream.get_final_message()
     except Exception as exc:
         _log(
             conn,
