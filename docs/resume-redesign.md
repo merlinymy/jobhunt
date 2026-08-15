@@ -299,12 +299,17 @@ the story→`entry_key` repoint (fresh-clone: 9/9 attach); the fixtures.
   line as its own header contact line — verified present, verbatim from
   `facts.yaml`. The submission PDF is derived from that .docx via LibreOffice
   headless (`docx_to_pdf`), which carries the line through, and `verify_copy_paste_
-  order` (pypdf) checks the §8 copy-paste property on the host. **Remaining:**
-  rewire `build_packet` to render the .docx master → soffice PDF (with a
-  `resume_docx` master column) and verify end-to-end on a host with LibreOffice.
-  Until that lands, `build_packet` still emits the RenderCV PDF (no work-auth), so
-  the deviation is *not yet closed for the packet* — the mechanism exists, the
-  integration does not.
+  order` (pypdf) checks the §8 copy-paste property on the host. The integration is
+  **staged** (migration 020 `resume_docx`; `build_packet` renders + stores the
+  .docx master every build and serves it at `GET /packet/{id}/resume.docx`;
+  `.docx`-on-request keys off `select.jd_wants_docx`). The docx→soffice PDF path
+  sits behind `tailor.DOCX_SUBMISSION_PDF = False`, gated on LibreOffice, and does
+  **not** auto-engage — RenderCV stays the working default, so behavior is
+  unchanged and the deviation is *not yet closed for the packet*.
+  **Closure condition (all on a LibreOffice host):** work-auth line present in the
+  packet's actual PDF · `verify_copy_paste_order` passes on that PDF ·
+  `.docx`-on-request honored off the JD field. Only then flip
+  `DOCX_SUBMISSION_PDF = True` (one line) and close this item.
 - **`packet_chat` revise (send/apply) — disabled, needs redesign.** It revised by
   *rewording* against the corpus, which the redesign replaced. It now refuses with
   a clear message rather than fabricate. Revising a library resume means
