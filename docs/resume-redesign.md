@@ -274,3 +274,47 @@ New cases for the new gates, alongside the retained number/identifier ones:
 - `repos_public` string value → **no link printed** (Amendment 4)
 - selection-model garbage → **falls back to the variant default, packet still
   builds** (§5)
+
+All of the above are implemented in `tests/test_select_engine.py` (27 cases,
+run by `make test`), which migrates a throwaway DB from empty — making the
+story-resolution case a genuine fresh-clone test.
+
+---
+
+## 11. Phase 1 outcome, deviations, and Phase 2 scope
+
+**Delivered (migrations 018–019, additive; old corpus tables untouched):** the
+`resume_*` schema and loader with the enforced load-time assertions; the `select`
+engine (deterministic title + skills, the selection gate, the trim guard whose
+load-bearing property is that a reword cannot be a subsequence of the source, and
+first-class deterministic fallback); the renderer (verbatim-only, strict
+`is True` link-gating, swap-in PEP/FPS entries); `build_packet` wired to
+select→render; `score._profile_prefix` and `formfill` repointed to the library;
+the story→`entry_key` repoint (fresh-clone: 9/9 attach); the fixtures.
+
+**Known Phase-1 deviations and follow-ups** — none fabricate; each degrades safely:
+
+- **§8 work-authorization line — deferred to Phase 2.** RenderCV's header has no
+  clean slot for the work-auth line (name/location/email/phone/website/LinkedIn/
+  GitHub are all rendered; the work-auth line is not). Forcing it in would either
+  hack the theme (distorting the renderer — a real invariant) or stuff it into the
+  summary (muddying "the summary is exactly `summaries[key]`"). The docx renderer
+  has real header control and is its honest home. **This is a live §8 contract
+  item, not resolved.**
+- **`packet_chat` revise (send/apply) — disabled, needs redesign.** It revised by
+  *rewording* against the corpus, which the redesign replaced. It now refuses with
+  a clear message rather than fabricate. Revising a library resume means
+  re-selecting; that is its own design.
+- **`gaps.py` — removed from the build path.** The select engine picks from
+  pre-approved bullets, so the adjacency hint is no longer fed in. The §7
+  guarantee (no gap note on the resume) holds structurally. A library-native
+  coverage-gap note *into the packet* (§7 forward-looking) is unbuilt.
+- **`views.fill_view` — content repointed, dates omitted.** The library is
+  year-level (§9); /fill's month-precision multi-format date helper has no
+  source. Reconcile with a year-level display or a separate date source.
+
+**Phase 2 scope (hand this to review before the go):** the `python-docx` master
++ text-based PDF output and `.docx`-on-request — and, riding on the docx header,
+**the §8 work-authorization line**. The three follow-ups above (packet_chat
+revise-by-reselect, gaps coverage-note, fill_view dates) are Phase-1 debt to
+place into Phase 2 or a 1.5 pass at review.
