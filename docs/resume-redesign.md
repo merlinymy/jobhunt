@@ -294,13 +294,17 @@ the story→`entry_key` repoint (fresh-clone: 9/9 attach); the fixtures.
 
 **Known Phase-1 deviations and follow-ups** — none fabricate; each degrades safely:
 
-- **§8 work-authorization line — deferred to Phase 2.** RenderCV's header has no
-  clean slot for the work-auth line (name/location/email/phone/website/LinkedIn/
-  GitHub are all rendered; the work-auth line is not). Forcing it in would either
-  hack the theme (distorting the renderer — a real invariant) or stuff it into the
-  summary (muddying "the summary is exactly `summaries[key]`"). The docx renderer
-  has real header control and is its honest home. **This is a live §8 contract
-  item, not resolved.**
+- **§8 work-authorization line — mechanism built in Phase 2, closure pending
+  integration.** The docx renderer (`docx_render.build_docx`) places the work-auth
+  line as its own header contact line — verified present, verbatim from
+  `facts.yaml`. The submission PDF is derived from that .docx via LibreOffice
+  headless (`docx_to_pdf`), which carries the line through, and `verify_copy_paste_
+  order` (pypdf) checks the §8 copy-paste property on the host. **Remaining:**
+  rewire `build_packet` to render the .docx master → soffice PDF (with a
+  `resume_docx` master column) and verify end-to-end on a host with LibreOffice.
+  Until that lands, `build_packet` still emits the RenderCV PDF (no work-auth), so
+  the deviation is *not yet closed for the packet* — the mechanism exists, the
+  integration does not.
 - **`packet_chat` revise (send/apply) — disabled, needs redesign.** It revised by
   *rewording* against the corpus, which the redesign replaced. It now refuses with
   a clear message rather than fabricate. Revising a library resume means
