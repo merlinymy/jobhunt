@@ -55,6 +55,10 @@ tasks:
     # quality needs it. Title and skills are deterministic post-processing in
     # select.py, never model output. The library block is cached every call.
     model: claude-opus-4-8
+    # This is the interactive packet-build call, and it picks from a fixed library
+    # rather than composing — max-effort thinking is wasted latency here, so it
+    # runs at `high` while the composition tasks keep the global `effort: max`.
+    effort: high
     cache_profile: true
   tailor:
     model: claude-opus-4-8     # quality-critical, ~100 calls/mo, drives callbacks
