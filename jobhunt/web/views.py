@@ -143,6 +143,13 @@ def detail_view(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]
 # ------------------------------------------------------------------ review ---
 
 
+# A single company floods the queue when it spam-posts one role under many
+# distinct titles (CLERA listed 157 "Founding … Engineer" variants) — which the
+# (company, title_norm) collapse can't fold because the titles genuinely differ.
+# Cap how many roles any one company contributes; companies under it are untouched.
+MAX_ROLES_PER_COMPANY = 5
+
+
 def review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
     """Top `limit` scored postings, plus how many are waiting in total.
 
@@ -152,6 +159,10 @@ def review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, A
     scored rows were the same role relisted per metro — 24% of the queue — and
     six of the first eight cards were one Clera founding-engineer posting in
     different cities. Showing eight cards that are really three is not a queue.
+
+    A single company is also capped at MAX_ROLES_PER_COMPANY cards: a board
+    spammer floods the queue with one role under many distinct titles, which the
+    (company, title_norm) collapse cannot fold because the titles genuinely differ.
 
     Nothing is deleted or hidden from the DB; the pipeline table still has every
     row. This picks the best-located member of each group to show, which is why
@@ -183,8 +194,22 @@ def review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, A
         seen[key] = 0
         collapsed.append(row)
 
+    # Cap any one company (see MAX_ROLES_PER_COMPANY). `collapsed` is already
+    # ranked, so this keeps each company's best few and folds the rest, with a
+    # per-company count so nothing is silently hidden.
+    per_company: dict[int, int] = {}
+    folded: dict[int, int] = {}
+    capped = []
+    for row in collapsed:
+        cid = int(row["company_id"])
+        if per_company.get(cid, 0) >= MAX_ROLES_PER_COMPANY:
+            folded[cid] = folded.get(cid, 0) + 1
+            continue
+        per_company[cid] = per_company.get(cid, 0) + 1
+        capped.append(row)
+
     batch = []
-    for row in collapsed[:limit]:
+    for row in capped[:limit]:
         jd = (row["jd_text"] or "").strip()
         batch.append({
             "application_id": int(row["application_id"]),
@@ -198,8 +223,9 @@ def review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, A
             "referral": row["referral"],
             "excerpt": (jd[:JD_EXCERPT] + "…") if len(jd) > JD_EXCERPT else jd,
             "also_in": seen[(int(row["company_id"]), row["title_norm"] or row["title"])],
+            "company_folded": folded.get(int(row["company_id"]), 0),
         })
-    return batch, len(collapsed)
+    return batch, len(capped)
 
 
 def _where(location: str | None, remote: str | None) -> str:
