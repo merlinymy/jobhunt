@@ -183,9 +183,40 @@ def norm_company_name(name: str) -> str:
     return " ".join(words)
 
 
-def norm_title(title: str) -> str:
-    """Soft-dedup key for `jobs.title_norm` — same role reposted or re-listed."""
+def _loc_words(value: object) -> str:
+    """Punctuation-folded, space-joined words — the shared normal form."""
+    return " ".join(_PUNCT.sub(" ", str(value or "").lower()).split())
+
+
+def norm_title(title: str, location: str | None = None) -> str:
+    """Soft-dedup key for `jobs.title_norm` — same role reposted or re-listed.
+
+    Strips a location some boards append to the title
+    ("Software Engineer, Platform - Aarhus, Denmark"), using the posting's own
+    `location` column, so the same role in fifty cities collapses to one key
+    instead of fifty. Without it the city rides in the key and every location
+    looks like a distinct role, defeating every dedup that reads `title_norm`.
+
+    Two strips: an exact trailing match of the location, and, for the common case
+    where the title says "CA, USA" while the column says "CA, US", a cut anchored
+    on the city (the location's first comma-component) once the column's leading
+    words confirm the tail really is the location, not a coincidence.
+    """
     text = _PUNCT.sub(" ", title.lower())
     # Drop req IDs and the roman-numeral / roman-ish level suffixes aggregators add.
     text = re.sub(r"\b(?:req|job|id)\s*\d+\b", " ", text)
-    return " ".join(text.split())
+    norm = " ".join(text.split())
+    if not location:
+        return norm
+    loc = _loc_words(location)
+    if not loc or norm == loc:
+        return norm
+    if norm.endswith(" " + loc):
+        return norm[: -(len(loc) + 1)].rstrip()
+    loc_tokens = loc.split()
+    if len(loc_tokens) >= 2:
+        city = _loc_words(str(location).split(",")[0])
+        idx = norm.rfind(" " + city) if city else -1
+        if idx > 0 and norm[idx + 1 :].split()[: len(loc_tokens) - 1] == loc_tokens[:-1]:
+            return norm[:idx].rstrip()
+    return norm

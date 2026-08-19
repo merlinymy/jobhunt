@@ -84,7 +84,7 @@ def find_similar_jobs(
          WHERE j.company_id = ? AND j.title_norm = ?
                AND IFNULL(j.location, '') = IFNULL(?, '')
         """,
-        (company_id, norm_title(title), location),
+        (company_id, norm_title(title, location), location),
     ).fetchall()
 
 
@@ -120,7 +120,7 @@ def insert_job(
             (
                 company_id,
                 title.strip(),
-                norm_title(title),
+                norm_title(title, location),
                 location,
                 remote or "unknown",
                 apply_url.strip(),
