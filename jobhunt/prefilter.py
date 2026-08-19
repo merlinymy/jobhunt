@@ -312,7 +312,8 @@ def run(
     by_rule: dict[str, int] = {}
 
     sql = """
-        SELECT a.id AS application_id, j.title, j.jd_text, j.location, j.remote,
+        SELECT a.id AS application_id, j.company_id, j.title_norm,
+               j.title, j.jd_text, j.location, j.remote,
                c.name AS company
           FROM applications a
           JOIN jobs j      ON j.id = a.job_id
@@ -323,6 +324,11 @@ def run(
     fetched = conn.execute(
         sql + (f" LIMIT {int(limit)}" if limit else ""), (states.DISCOVERED,)
     ).fetchall()
+    # Roles already handled at another location, computed once for the pass: a
+    # duplicate city of one is dropped below before the LLM ever scores it.
+    from . import queries
+
+    handled = queries.handled_role_keys(conn)
     for index, row in enumerate(fetched):
         # Every 25, and outside the transaction below. Free and deterministic,
         # but a backlog of several thousand is still ten seconds of a dashboard
@@ -333,7 +339,14 @@ def run(
                 counts={k: v for k, v in counts.items() if v},
             )
         counts["examined"] += 1
-        verdict = evaluate(row, cfg, row["company"])
+        key = (int(row["company_id"]), row["title_norm"] or row["title"])
+        if key in handled:
+            # Same role already applied to, skipped, rejected, or in a packet at
+            # another location — one shot, already taken or set aside. Dropped
+            # here so a duplicate city is never scored.
+            verdict = Verdict(False, "duplicate", "same role already handled elsewhere")
+        else:
+            verdict = evaluate(row, cfg, row["company"])
         if verdict.passed:
             counts["passed"] += 1
             continue
