@@ -82,8 +82,11 @@ tasks:
     # corpus is cached once for the form rather than once per question.
     #
     # The output is the largest of any task here: five answers times however many
-    # boxes the form has, plus max-effort thinking on top.
+    # boxes the form has. Runs at `high` effort, not the global `max`: max made
+    # drafting a form take far too long on the interactive path, and answering
+    # application questions is composition a notch below the tailor tier.
     model: claude-opus-4-8
+    effort: high
     cache_profile: true
   gaps:
     # Runs once per application, before tailoring, and its answer is stored — it
