@@ -396,7 +396,8 @@ def recheck(
     by_rule: dict[str, int] = {}
 
     sql = """
-        SELECT a.id AS application_id, j.title, j.jd_text, j.location, j.remote,
+        SELECT a.id AS application_id, j.company_id, j.title_norm,
+               j.title, j.jd_text, j.location, j.remote,
                c.name AS company
           FROM applications a
           JOIN jobs j      ON j.id = a.job_id
@@ -407,6 +408,11 @@ def recheck(
     fetched = conn.execute(
         sql + (f" LIMIT {int(limit)}" if limit else ""), (states.SCORED,)
     ).fetchall()
+    # A scored row whose role has since been handled at another location is a
+    # duplicate too — retire it here on a recheck, the same as the forward pass.
+    from . import queries
+
+    handled = queries.handled_role_keys(conn)
 
     for index, row in enumerate(fetched):
         if on_progress and index % 25 == 0:
@@ -415,7 +421,11 @@ def recheck(
                 counts={k: v for k, v in counts.items() if v},
             )
         counts["examined"] += 1
-        verdict = evaluate(row, cfg, row["company"])
+        key = (int(row["company_id"]), row["title_norm"] or row["title"])
+        if key in handled:
+            verdict = Verdict(False, "duplicate", "same role already handled elsewhere")
+        else:
+            verdict = evaluate(row, cfg, row["company"])
         if verdict.passed:
             counts["passed"] += 1
             continue
