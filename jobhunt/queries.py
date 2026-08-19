@@ -721,6 +721,27 @@ def sibling_application_ids(conn: sqlite3.Connection, application_id: int) -> li
     ]
 
 
+def handled_role_keys(conn: sqlite3.Connection) -> set[tuple[int, str]]:
+    """`(company_id, title_norm)` for every role already handled at any location.
+
+    A role in `states.HANDLED_STATES` via any of its postings. The review queue
+    drops a newly-scored sibling whose key is in this set, so a role you have
+    applied to, skipped, rejected, or are already building a packet for does not
+    reappear as a fresh card because a different city was just discovered. The
+    key matches `review_batch`'s collapse key exactly, title fallback included.
+    """
+    marks = ",".join("?" for _ in states.HANDLED_STATES)
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT j.company_id, j.title_norm, j.title
+          FROM applications a JOIN jobs j ON j.id = a.job_id
+         WHERE a.state IN ({marks})
+        """,
+        tuple(states.HANDLED_STATES),
+    ).fetchall()
+    return {(int(r["company_id"]), r["title_norm"] or r["title"]) for r in rows}
+
+
 def scored_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Everything in `scored`, with the one referral name that matters per row."""
     return conn.execute(

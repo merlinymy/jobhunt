@@ -100,6 +100,16 @@ RESPONSE_STATES = frozenset({REJECTED, INTERVIEW, OFFER})
 # real" wants this set, not `resume_pdf IS NOT NULL`.
 SUBMITTED_STATES = frozenset({APPLIED}) | RESPONSE_STATES
 
+# A role is "handled" once one of its postings has advanced past `scored` — by a
+# decision of mine (approved, packet built, submitted, or explicitly skipped) or
+# by the employer's response. The review queue suppresses a newly-scored sibling
+# (same company + title_norm, another city) whose role is already handled: the
+# same role is one shot, already taken or set aside. FILTERED and EXPIRED are
+# deliberately absent — a passive drop is not a decision on the role.
+HANDLED_STATES = frozenset(
+    {JOB_APPROVED, PACKET_READY, APPLIED, INTERVIEW, OFFER, REJECTED, SKIPPED}
+)
+
 EVENT_KINDS = frozenset({"state_change", "email_in", "note", "interview", "digest_sent"})
 
 

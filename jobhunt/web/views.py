@@ -146,7 +146,9 @@ def detail_view(conn: sqlite3.Connection, application_id: int) -> dict[str, Any]
 def review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, Any]], int]:
     """Top `limit` scored postings, plus how many are waiting in total.
 
-    Collapsed on `(company_id, title_norm)`. Measured on a real run: 160 of 661
+    Collapsed on `(company_id, title_norm)`, and dropped entirely when that role
+    is already handled at another location (applied, skipped, rejected, or a
+    packet in flight). Measured on a real run: 160 of 661
     scored rows were the same role relisted per metro — 24% of the queue — and
     six of the first eight cards were one Clera founding-engineer posting in
     different cities. Showing eight cards that are really three is not a queue.
@@ -164,10 +166,17 @@ def review_batch(conn: sqlite3.Connection, limit: int) -> tuple[list[dict[str, A
     # Sorted first, so the survivor of each group is the best-located one — the
     # remote listing of a role wins over the Houston one, which is the whole
     # point of ranking location.
+    # Roles already handled at another city are dropped, not just collapsed against
+    # each other: a new metro of a role you've applied to, skipped, rejected, or
+    # are already building a packet for is not a fresh card. Nothing is deleted —
+    # the row stays in the pipeline table and the detail page's siblings panel.
+    handled = queries.handled_role_keys(conn)
     seen: dict[tuple[int, str], int] = {}
     collapsed = []
     for row in ranked:
         key = (int(row["company_id"]), row["title_norm"] or row["title"])
+        if key in handled:
+            continue
         if key in seen:
             seen[key] += 1
             continue
