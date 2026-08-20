@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ChevronRight, SlidersHorizontal, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { usePipeline } from "../api/queries";
@@ -25,6 +25,19 @@ export default function Pipeline() {
   const { data, isPending, error, refetch } = usePipeline(query);
   const desktop = useIsDesktop();
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  /* Land on the job_approved backlog — the queue you actually act on — rather
+     than every application ever. Applied once on entry and only when no state is
+     already set, so a bookmarked or back-navigated ?state= wins, and clearing the
+     chip during the session still shows everything. */
+  useEffect(() => {
+    if (!params.get("state")) {
+      const next = new URLSearchParams(params);
+      next.set("state", "job_approved");
+      setParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* Filter and sort live in the URL, not in state. README sells "any view is a
      bookmarkable URL that survives a reload", and it is the property most easily
