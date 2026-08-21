@@ -14,9 +14,11 @@ passes the seniority band. A posting with no JD passes the tech dealbreakers. A
 company we cannot name passes the blocklist. Absent evidence is never treated as
 disqualifying evidence, and that asymmetry is deliberate everywhere below.
 
-**Title and level are the only hard filters. Location ranks, comp does neither.**
-Nothing in this module looks at compensation, and location appears only as an
-ordering key. If a rule here starts rejecting on either, it is a bug.
+**Title and level are the only hard filters — plus one opt-in eligibility filter:
+`non_us_onsite` rejects an onsite role positively outside the US, because a job
+you cannot take is a refusal, not a ranking.** Location otherwise only orders
+(`location_tier`); comp neither filters nor orders — nothing here reads it. Every
+filter fails open: absent or ambiguous data never rejects.
 
 Every rejection records *which* rule fired, in the `events` row, so a digest
 that has gone quiet can be traced to the rule that did it rather than guessed at.
@@ -213,6 +215,12 @@ def evaluate(job: sqlite3.Row, cfg: Config, company: str | None = None) -> Verdi
     if company and cfg.exclusions.get("staffing_agencies") and _STAFFING.search(company):
         return Verdict(False, "staffing_agencies", "company name reads as an agency")
 
+    # Work eligibility — the one filter that rejects on location (opt-in, fails
+    # open; see _us_or_remote). An onsite role positively outside the US is a
+    # genuine refusal; remote, US, and anything ambiguous pass.
+    if cfg.exclusions.get("non_us_onsite") and not _us_or_remote(job["location"], job["remote"]):
+        return Verdict(False, "non_us_onsite", f"onsite outside the US: {job['location']!r}")
+
     # Everything below reads the JD. No JD means these rules cannot fire —
     # several board vendors return none, and silence is not evidence.
     jd = (job["jd_text"] or "").strip()
@@ -236,10 +244,83 @@ def evaluate(job: sqlite3.Row, cfg: Config, company: str | None = None) -> Verdi
     return Verdict(True)
 
 
+# US-eligibility hard filter (opt-in via `exclusions.non_us_onsite`). The one
+# place location REJECTS rather than ranks — a deliberate exception for work
+# eligibility, not preference: an onsite role outside the US is a genuine refusal
+# when you can't take it, which is the primary-filter test. It still fails OPEN —
+# remote, US, unknown, and any location we cannot positively place as foreign all
+# pass; only a location we can read as non-US is dropped.
+_US_STATE_CODES = (
+    "al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma mi mn ms mo mt "
+    "ne nv nh nj nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy dc"
+).split()
+_US_STATE_NAMES = [
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+    "delaware", "florida", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas",
+    "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada", "ohio", "oklahoma",
+    "oregon", "pennsylvania", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "wisconsin", "wyoming", "new hampshire", "new jersey", "new mexico",
+    "new york", "north carolina", "north dakota", "rhode island", "south carolina",
+    "south dakota", "west virginia", "district of columbia",
+]
+_US_SIGNAL = re.compile(
+    r"\b(?:usa|united states)\b|,\s*us\b|,\s*(?:" + "|".join(_US_STATE_CODES) + r")\b", re.I
+)
+_US_NAME = re.compile(r"\b(?:" + "|".join(_US_STATE_NAMES) + r")\b", re.I)
+# Foreign countries (whole-word — "united kingdom" via "kingdom", "united arab
+# emirates" via "emirates"), plus the bare foreign cities that show up without a
+# country. `georgia` is deliberately absent — here it is a US state.
+_NON_US_COUNTRIES = frozenset((
+    "canada mexico brazil argentina chile colombia peru uruguay ecuador panama bolivia "
+    "guatemala kingdom england scotland wales ireland france germany spain portugal italy "
+    "netherlands belgium switzerland austria sweden norway denmark finland iceland poland "
+    "czechia czech slovakia hungary romania bulgaria greece croatia serbia ukraine russia "
+    "turkey estonia latvia lithuania luxembourg india china japan korea taiwan singapore "
+    "thailand vietnam philippines indonesia malaysia cambodia myanmar australia zealand "
+    "pakistan bangladesh lanka nepal emirates uae qatar bahrain kuwait oman israel jordan "
+    "lebanon egypt nigeria kenya ghana morocco tunisia ethiopia uganda tanzania senegal"
+).split())
+_NON_US_CITIES = frozenset({
+    "berlin", "munich", "london", "paris", "madrid", "amsterdam", "dublin", "zurich",
+    "geneva", "milan", "rome", "lisbon", "stockholm", "oslo", "copenhagen", "helsinki",
+    "warsaw", "prague", "budapest", "athens", "istanbul", "singapore", "taipei", "tokyo",
+    "osaka", "seoul", "beijing", "shanghai", "shenzhen", "hong kong", "bangkok", "jakarta",
+    "manila", "kuala lumpur", "mumbai", "delhi", "new delhi", "bengaluru", "bangalore",
+    "hyderabad", "chennai", "pune", "sydney", "melbourne", "brisbane", "auckland",
+    "toronto", "vancouver", "montreal", "ottawa", "mexico city", "sao paulo", "buenos aires",
+    "santiago", "bogota", "lima", "dubai", "abu dhabi", "doha", "riyadh", "tel aviv",
+    "cairo", "lagos", "abuja", "nairobi", "johannesburg", "cape town",
+})
+
+
+def _us_or_remote(location: str | None, remote: str | None) -> bool:
+    """True if US-based, fully remote, or too ambiguous to reject — fail open.
+
+    Only a location we can positively read as foreign returns False, so a bare US
+    city ("San Francisco") or an empty location is kept, never dropped on bad data.
+    """
+    if (remote or "").lower() == "remote":
+        return True
+    loc = (location or "").strip()
+    if not loc:
+        return True
+    low = loc.lower()
+    if _US_SIGNAL.search(loc) or _US_NAME.search(low):
+        return True
+    if set(re.findall(r"[a-z]+", low)) & _NON_US_COUNTRIES:
+        return False
+    parts = [p.strip() for p in low.replace(";", ",").split(",")]
+    if low in _NON_US_CITIES or any(p in _NON_US_CITIES for p in parts):
+        return False
+    return True
+
+
 # ================================== location ==================================
 #
-# Location RANKS and never rejects — the list in scoring.yaml ends in a
-# catch-all. This produces the tier index the digest sorts on, nothing more.
+# This ranking never rejects — the list in scoring.yaml ends in a catch-all — and
+# the opt-in `non_us_onsite` filter above is the sole place location drops a row.
+# This produces the tier index the digest sorts on, nothing more.
 
 _BAY_AREA = re.compile(
     r"\b(?:san\s+francisco|sf|oakland|berkeley|san\s+jose|palo\s+alto|mountain\s+view|"
