@@ -38,6 +38,11 @@ TRANSITIONS: frozenset[tuple[str | None, str]] = frozenset(
         (None, APPLIED),  # manual entry / Phase 0 backfill
         (DISCOVERED, FILTERED),
         (DISCOVERED, SCORED),
+        # Un-filter for re-evaluation: a filter rule was loosened or removed
+        # (e.g. `intern` dropped from titles_block), so a row it rejected goes
+        # back through prefilter + scoring rather than staying dead — the
+        # loosening complement to (SCORED, FILTERED)'s recheck.
+        (FILTERED, DISCOVERED),
         # Re-applying the deterministic rules to a row that was scored under an
         # older `scoring.yaml`. Editing the rules is what makes a queue stale:
         # narrowing the seniority band left 1,652 of 4,161 review cards asking
