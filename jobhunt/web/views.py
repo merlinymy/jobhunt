@@ -427,11 +427,20 @@ def fill_view(conn: sqlite3.Connection) -> dict[str, Any]:
         return items, "\n".join(f"• {t}" for t in items)
 
     entries = queries.resume_variant_entries(conn, "general")
+
+    # All resume-usable bullets per experience/project (grouped by entry_key), not
+    # just the variant's defaults, so the fill page shows the full set to copy
+    # from. Interview-tier is excluded — it is what may go on a resume/application.
+    by_key: dict[str, list[str]] = {}
+    for b in queries.resume_bullets(conn):
+        if b["tier"] != "interview":
+            by_key.setdefault(b["entry_key"], []).append(b["id"])
+
     experiences = []
     for entry in entries:
         if entry["kind"] != "experience":
             continue
-        items, block = described(entry["default_bullets"])
+        items, block = described(by_key.get(entry["entry_key"], []))
         experiences.append({
             "company": entry["company"], "title": entry["role"],
             "location": None, "employment_type": None,
@@ -439,19 +448,13 @@ def fill_view(conn: sqlite3.Connection) -> dict[str, Any]:
             "bullets": items, "description": block,
         })
 
-    # Bullets by entry, for the swap-in projects that carry no variant default.
-    by_key: dict[str, list[str]] = {}
-    for b in queries.resume_bullets(conn):
-        if b["tier"] != "interview":
-            by_key.setdefault(b["entry_key"], []).append(b["id"])
-
     projects = []
     seen: set[str] = set()
     for entry in entries:
         if entry["kind"] != "project":
             continue
         seen.add(entry["entry_key"])
-        items, block = described(entry["default_bullets"])
+        items, block = described(by_key.get(entry["entry_key"], []))
         projects.append({
             "name": entry["name"], "url": None, "role": None,
             "start": None, "end": None, "date": entry["date_text"],

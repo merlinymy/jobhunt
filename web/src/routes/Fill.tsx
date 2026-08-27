@@ -87,12 +87,25 @@ function Entry({ entry, nameLabel }: { entry: FillEntry; nameLabel: string }) {
         {entry.url && <Row label="URL" value={entry.url} />}
       </div>
       <Dates start={entry.start} end={entry.end} />
-      <div className="mt-3">
-        <p className="text-xs text-dim">Description</p>
-        <CopyButton value={entry.description} block className="-ml-2">
-          <span className="whitespace-pre-wrap text-sm">{entry.description}</span>
-        </CopyButton>
-      </div>
+      {entry.bullets.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <p className="text-xs text-dim">Bullets</p>
+            <CopyButton value={entry.description} className="text-xs text-dim">
+              Copy all
+            </CopyButton>
+          </div>
+          {/* Each bullet is individually copyable — most ATS want them pasted one
+              per box. "Copy all" gives the joined block for a single description field. */}
+          <div className="grid gap-1">
+            {entry.bullets.map((bullet, i) => (
+              <CopyButton key={i} value={bullet} block className="-ml-2">
+                <span className="whitespace-pre-wrap text-sm">{bullet}</span>
+              </CopyButton>
+            ))}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
